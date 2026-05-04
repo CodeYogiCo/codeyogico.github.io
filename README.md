@@ -1,11 +1,21 @@
 # about-me
 
-Personal site. Plain HTML + CSS for now; will be ported to React + Vite next.
+Personal site. Vite + React.
 
-## Local
+## Local dev
 
-Open `index.html` in a browser, or run any static server in this folder.
+```sh
+npm install
+npm run dev      # http://localhost:5173
+```
+
+## Build
+
+```sh
+npm run build    # outputs to dist/
+npm run preview  # preview the production build locally
+```
 
 ## Deploy
 
-To be deployed to AWS (Amplify or S3 + CloudFront).
+Will be deployed to AWS (Amplify or S3 + CloudFront).

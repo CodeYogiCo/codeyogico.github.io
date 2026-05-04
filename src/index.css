@@ -1,4 +1,4 @@
-/* turbopuffer-inspired theme: near-black bg, off-white text, cyan accent,
+/* turbopuffer-inspired theme: light bg, dark text, cyan accent,
    monospace flavor, subtle dividers, generous whitespace. */
 
 :root {
@@ -7,8 +7,8 @@
   --fg:        #1a1a1a;
   --fg-dim:    #6b6b6b;
   --fg-faint:  #9a9a9a;
-  --accent:    #0a8a99;   /* darker cyan, readable on white */
-  --accent-2:  #0e7c6a;   /* teal/mint, used sparingly */
+  --accent:    #0a8a99;
+  --accent-2:  #0e7c6a;
   --rule:      #e6e4df;
   --max:       720px;
 
@@ -44,7 +44,6 @@ a:hover { border-bottom-color: var(--accent); }
   padding: 48px 24px 96px;
 }
 
-/* ---------- top nav ---------- */
 .topnav {
   display: flex;
   gap: 22px;
@@ -63,7 +62,6 @@ a:hover { border-bottom-color: var(--accent); }
   border-bottom-color: var(--fg-dim);
 }
 
-/* ---------- hero ---------- */
 .hero {
   display: grid;
   grid-template-columns: auto 1fr;
@@ -72,9 +70,7 @@ a:hover { border-bottom-color: var(--accent); }
   margin-bottom: 40px;
 }
 
-.hero-photo {
-  width: 168px;
-}
+.hero-photo { width: 168px; }
 
 .ascii-frame {
   font-family: var(--mono);
@@ -86,6 +82,7 @@ a:hover { border-bottom-color: var(--accent); }
   border: 1px solid var(--rule);
   padding: 10px 12px;
   border-radius: 4px;
+  margin: 0;
 }
 
 .hero-text h1 {
@@ -102,17 +99,12 @@ a:hover { border-bottom-color: var(--accent); }
   margin: 0 0 20px;
 }
 
-.bio {
-  margin: 0;
-  color: var(--fg);
-}
-
+.bio { margin: 0; color: var(--fg); }
 .bio .hl {
   color: var(--fg);
   border-bottom: 1px dotted var(--fg-faint);
 }
 
-/* ---------- socials ---------- */
 .socials {
   display: grid;
   grid-template-columns: repeat(4, 1fr);
@@ -139,14 +131,12 @@ a:hover { border-bottom-color: var(--accent); }
 .s-handle { color: var(--fg-dim); }
 .s-count  { color: var(--accent); margin-top: 4px; }
 
-/* ---------- rules ---------- */
 .rule {
   border: none;
   border-top: 1px dashed var(--rule);
   margin: 48px 0;
 }
 
-/* ---------- generic block ---------- */
 .block h2 {
   font-family: var(--mono);
   font-size: 13px;
@@ -156,18 +146,12 @@ a:hover { border-bottom-color: var(--accent); }
   color: var(--fg-dim);
   margin: 0 0 20px;
 }
-
 .block h2::before {
   content: "// ";
   color: var(--fg-faint);
 }
 
-/* ---------- entries (writing) ---------- */
-.entries {
-  list-style: none;
-  padding: 0;
-  margin: 0;
-}
+.entries { list-style: none; padding: 0; margin: 0; }
 .entries li {
   display: grid;
   grid-template-columns: 110px 1fr;
@@ -182,9 +166,7 @@ a:hover { border-bottom-color: var(--accent); }
   color: var(--fg-faint);
   padding-top: 3px;
 }
-.entries a {
-  color: var(--fg);
-}
+.entries a { color: var(--fg); }
 .entries a:hover { color: var(--accent); border-bottom-color: var(--accent); }
 
 .more {
@@ -194,7 +176,6 @@ a:hover { border-bottom-color: var(--accent); }
   font-size: 13px;
 }
 
-/* ---------- projects ---------- */
 .projects {
   list-style: none;
   padding: 0;
@@ -235,7 +216,6 @@ a:hover { border-bottom-color: var(--accent); }
   font-size: 14.5px;
 }
 
-/* ---------- newsletter ---------- */
 .newsletter p { color: var(--fg-dim); margin: 0 0 14px; }
 .sub {
   display: flex;
@@ -267,7 +247,6 @@ a:hover { border-bottom-color: var(--accent); }
 }
 .sub button:hover { background: var(--accent-2); }
 
-/* ---------- footer ---------- */
 .foot {
   margin-top: 64px;
   padding-top: 20px;
@@ -281,7 +260,6 @@ a:hover { border-bottom-color: var(--accent); }
 .foot a { color: var(--fg-dim); margin-left: 16px; }
 .foot a:hover { color: var(--accent); }
 
-/* ---------- responsive ---------- */
 @media (max-width: 620px) {
   .hero { grid-template-columns: 1fr; }
   .hero-photo { width: 168px; }
