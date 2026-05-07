@@ -3,6 +3,8 @@ import { marked } from 'marked'
 import { profile } from './data'
 import { posts, visiblePosts } from './loadPosts'
 
+const lastEdit = visiblePosts[0]?.date || posts[0]?.date || ''
+
 function useTheme() {
   const [theme, setTheme] = useState(() => {
     try {
@@ -53,7 +55,7 @@ function StatusBar({ theme, onToggleTheme, mode }) {
       <div className="left">
         <span style={{ fontVariantNumeric: 'tabular-nums' }}>{time}</span>
         <span style={{ margin: '0 10px', color: 'var(--rule)' }}>·</span>
-        <span>{mode === 'post' ? 'reading view' : `last edit ${profile.lastEdit}`}</span>
+        <span>{mode === 'post' ? 'reading view' : `last edit ${lastEdit}`}</span>
       </div>
       <div className="right">
         {mode === 'post' ? (
