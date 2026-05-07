@@ -72,6 +72,15 @@ export const posts = [
     read: '4 min',
     deck: 'Why I keep a notebook of unfinished systems, and what they taught me.',
   },
+  {
+    slug: 'draft-unlisted-example',
+    date: '2026-05-01',
+    tag: 'draft',
+    title: 'An unlisted draft only reachable by direct link',
+    read: '3 min',
+    deck: 'This post is hidden from the index but still loads if you know the URL.',
+    hidden: true,
+  },
 ]
 
 export const postBodies = {

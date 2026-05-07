@@ -1,6 +1,8 @@
 import { useEffect, useState } from 'react'
 import { profile, posts, postBodies, genericBody } from './data'
 
+const visiblePosts = posts.filter((p) => !p.hidden)
+
 function useTheme() {
   const [theme, setTheme] = useState(() => {
     try {
@@ -134,9 +136,9 @@ function About() {
 function PostsList() {
   return (
     <section className="section">
-      <SectionLabel id="writing">writing · {posts.length} posts</SectionLabel>
+      <SectionLabel id="writing">writing · {visiblePosts.length} posts</SectionLabel>
       <ul className="posts">
-        {posts.map((p) => (
+        {visiblePosts.map((p) => (
           <li key={p.slug}>
             <span className="date">{p.date}</span>
             <span className="tag">{p.tag}</span>
@@ -240,10 +242,10 @@ function Body({ blocks }) {
 }
 
 function Post({ slug }) {
-  const idx = Math.max(0, posts.findIndex((p) => p.slug === slug))
-  const post = posts[idx]
-  const prev = posts[idx + 1]
-  const next = posts[idx - 1]
+  const post = posts.find((p) => p.slug === slug) || posts[0]
+  const visIdx = visiblePosts.findIndex((p) => p.slug === post.slug)
+  const prev = visIdx >= 0 ? visiblePosts[visIdx + 1] : undefined
+  const next = visIdx >= 0 ? visiblePosts[visIdx - 1] : undefined
   const blocks = postBodies[post.slug] || genericBody
 
   useEffect(() => {
