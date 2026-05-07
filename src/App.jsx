@@ -91,7 +91,7 @@ function Identity() {
         </div>
         <div className="role">{profile.role}</div>
         <div className="tagline">
-          Building engineering, systems, and search. Always{' '}
+          Building engineering, systems, search, and tech culture. Always{' '}
           <span className="fn">
             building
             <span className="note">— in spreadsheets, in prose, in code.</span>
@@ -108,9 +108,10 @@ function About() {
     <section className="section about">
       <SectionLabel id="about">about</SectionLabel>
       <p>
-        I’m a principal engineer working on the unglamorous middle of the stack — storage,
-        indexing, query planning, and the long tail of failure modes that don’t make it
-        into design docs. I’ve been doing this for a while; I’m still learning a lot.
+        I’m a principal engineer, six years deep in information retrieval, ranking, and
+        distributed systems — the unglamorous middle of the stack: storage, indexing,
+        query planning, and the long tail of failure modes that don’t make it into
+        design docs. I’ve been doing this for a while; I’m still learning a lot.
       </p>
       <p className="muted">
         This site is a place for me to write things down. Notes, half-formed essays,
