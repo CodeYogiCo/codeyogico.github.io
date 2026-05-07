@@ -109,9 +109,9 @@ function About() {
       <SectionLabel id="about">about</SectionLabel>
       <p>
         I’m a principal engineer working on the unglamorous middle of the stack —
-        databases, storage, indexing, query planning, and the long tail of failure
-        modes that don’t make it into design docs. I’ve been doing this for a while;
-        I’m still learning a lot.
+        storage, indexing, query planning, and the long tail of failure modes that
+        don’t make it into design docs. I’ve been doing this for a while; I’m still
+        learning a lot.
       </p>
       <p className="muted">
         This site is a place for me to write things down. Notes, half-formed essays,
@@ -120,7 +120,7 @@ function About() {
       </p>
       <dl className="kv">
         <dt>currently</dt><dd>building search infrastructure</dd>
-        <dt>focus</dt><dd>distributed systems, information retrieval and ranking, developer tooling</dd>
+        <dt>focus</dt><dd>distributed systems, databases, information retrieval and ranking, developer tooling</dd>
         <dt>elsewhere</dt>
         <dd>
           <a href={profile.linkedin} target="_blank" rel="noopener">linkedin</a>
