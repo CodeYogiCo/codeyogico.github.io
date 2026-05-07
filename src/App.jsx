@@ -155,6 +155,39 @@ function PostsList() {
   )
 }
 
+const CAT_WALK_A = ` /\\_/\\
+( ^.^ )
+//   \\\\`
+
+const CAT_WALK_B = ` /\\_/\\
+( ^.^ )
+\\\\   //`
+
+const CAT_SIT = ` /\\_/\\
+( -.- )
+ \\___/`
+
+function Cat() {
+  const [phase, setPhase] = useState('walk')
+  const [frame, setFrame] = useState(0)
+
+  useEffect(() => {
+    if (phase !== 'walk') return
+    const id = setInterval(() => setFrame((f) => (f + 1) % 2), 260)
+    return () => clearInterval(id)
+  }, [phase])
+
+  useEffect(() => {
+    const t = setTimeout(() => setPhase('sit'), 5200)
+    return () => clearTimeout(t)
+  }, [])
+
+  const ascii = phase === 'sit' ? CAT_SIT : frame === 0 ? CAT_WALK_A : CAT_WALK_B
+  return (
+    <pre className={`cat cat-${phase}`} aria-hidden="true">{ascii}</pre>
+  )
+}
+
 function Footer() {
   return (
     <footer className="footer">
@@ -262,6 +295,7 @@ export default function App() {
     <>
       <StatusBar theme={theme} onToggleTheme={toggleTheme} mode={route.name} />
       {route.name === 'post' ? <Post slug={route.slug} /> : <Index />}
+      <Cat />
     </>
   )
 }
