@@ -1,5 +1,5 @@
 ---
-date: 2025-05-30
+date: 2026-05-07
 tag: notes
 title: Always be building
 read: 4 min
