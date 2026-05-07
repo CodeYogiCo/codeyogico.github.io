@@ -65,8 +65,8 @@ a:hover {
   top: 0;
   z-index: 50;
   display: grid;
-  grid-template-columns: 1fr auto 1fr;
-  gap: 24px;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 16px;
   padding: 10px 24px;
   background: rgba(246, 244, 238, 0.92);
   backdrop-filter: blur(8px);
@@ -79,22 +79,22 @@ a:hover {
 [data-theme="dark"] .statusbar {
   background: rgba(15, 15, 13, 0.92);
 }
-.statusbar .left  { text-align: left; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.statusbar .mid   { text-align: center; white-space: nowrap; }
-.statusbar .right { text-align: right; display: flex; gap: 14px; justify-content: flex-end; align-items: center; white-space: nowrap; }
+.statusbar .left  {
+  text-align: left;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
+.statusbar .right {
+  display: flex;
+  gap: 14px;
+  justify-content: flex-end;
+  align-items: center;
+  white-space: nowrap;
+}
 .statusbar .right > * { white-space: nowrap; }
 .statusbar .right a { border-bottom: 0; }
-.statusbar .dot {
-  display: inline-block; width: 6px; height: 6px; border-radius: 50%;
-  background: #4cc46a; margin-right: 6px; vertical-align: 1px;
-  box-shadow: 0 0 0 0 rgba(76, 196, 106, 0.5);
-  animation: pulse 2.4s ease-out infinite;
-}
-@keyframes pulse {
-  0%   { box-shadow: 0 0 0 0 rgba(76, 196, 106, 0.55); }
-  70%  { box-shadow: 0 0 0 6px rgba(76, 196, 106, 0); }
-  100% { box-shadow: 0 0 0 0 rgba(76, 196, 106, 0); }
-}
 .theme-toggle {
   appearance: none;
   background: transparent;
@@ -434,6 +434,12 @@ a:hover {
   .posts .tag { grid-column: 1; }
   .posts .title { grid-column: 2; grid-row: 1 / span 2; }
   .posts .read { display: none; }
-  .statusbar { padding: 8px 14px; font-size: 10.5px; gap: 10px; }
+  .statusbar {
+    padding: 8px 14px;
+    font-size: 10.5px;
+    gap: 10px;
+  }
+  .statusbar .nav-link { display: none; }
   .kv { grid-template-columns: 90px 1fr; }
+  .post-title { font-size: 19px; }
 }

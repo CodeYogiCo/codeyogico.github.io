@@ -49,10 +49,6 @@ function StatusBar({ theme, onToggleTheme, mode }) {
   return (
     <div className="statusbar" role="banner">
       <div className="left">
-        <span className="dot" />
-        online · {profile.location}
-      </div>
-      <div className="mid">
         <span style={{ fontVariantNumeric: 'tabular-nums' }}>{time}</span>
         <span style={{ margin: '0 10px', color: 'var(--rule)' }}>·</span>
         <span>{mode === 'post' ? 'reading view' : `last edit ${profile.lastEdit}`}</span>
@@ -62,9 +58,9 @@ function StatusBar({ theme, onToggleTheme, mode }) {
           <a href="#">← all writing</a>
         ) : (
           <>
-            <a href="#writing">writing</a>
-            <a href="#about">about</a>
-            <a href={profile.linkedin} target="_blank" rel="noopener">linkedin ↗</a>
+            <a className="nav-link" href="#writing">writing</a>
+            <a className="nav-link" href="#about">about</a>
+            <a className="nav-link" href={profile.linkedin} target="_blank" rel="noopener">linkedin ↗</a>
           </>
         )}
         <button className="theme-toggle" onClick={onToggleTheme} aria-label="toggle theme">
