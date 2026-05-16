@@ -371,6 +371,39 @@ a:hover {
 .widget-grid-mrr {
   grid-template-columns: 1fr 110px 110px 28px;
 }
+.widget-grid-pr {
+  grid-template-columns: 60px 1fr 28px;
+}
+
+.widget-row-input {
+  margin-bottom: 12px;
+  font-size: 12px;
+  color: var(--ink-soft);
+}
+.widget-input.inline {
+  width: 70px;
+  display: inline-block;
+}
+
+.widget-toggle {
+  appearance: none;
+  background: var(--bg);
+  border: 1px solid var(--rule);
+  color: var(--ink-soft);
+  font-family: var(--mono);
+  font-size: 11.5px;
+  padding: 4px 10px;
+  border-radius: 3px;
+  cursor: pointer;
+  min-width: 140px;
+  text-align: left;
+}
+.widget-toggle:hover { border-color: var(--accent); }
+.widget-toggle.on {
+  color: var(--accent);
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
 .wg-head {
   font-size: 10.5px;
   text-transform: lowercase;

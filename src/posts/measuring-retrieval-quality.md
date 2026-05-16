@@ -1,52 +1,70 @@
 ---
 date: 2026-05-16
 tag: search
-title: "Measuring retrieval quality: NDCG, MRR, and friends"
-read: 9 min
-deck: "A working guide to the metrics that actually drive ranking decisions — with two small calculators you can play with."
+title: "Offline evaluation metrics for information retrieval"
+read: 10 min
+deck: "What an IR system is actually being asked, in four metrics — recall@k, precision@k, MRR, NDCG. With small calculators."
 hidden: true
 ---
 
-You can't improve a ranker if you can't measure it. That sounds obvious, but most teams I've worked with measure the wrong thing or measure the right thing badly, and then wonder why their offline experiments don't predict online behavior.
+Information retrieval is the discipline of helping a person locate documents that satisfy an *information need*. Offline evaluation is how we decide whether our system does that well, before it ever touches a user.
 
-This post walks through the metrics that actually drive retrieval decisions — what they tell you, what they don't, and when to reach for each. There are two small calculators embedded below; play with them. Intuition lives in the fingers.
+This post walks through the four offline metrics that cover most of IR — recall@k, precision@k, MRR, NDCG — framed around the information need each is asking about. Three small calculators are embedded; play with them. Intuition lives in the fingers.
 
-## the setup
+## the setup: what offline evaluation actually measures
 
-Every retrieval metric is asking the same shape of question:
+The Cranfield idea, going back to the 1960s, is to evaluate retrieval systems against a fixed **test collection**:
 
-> Given a query and the ordered list of results I returned, how good is it?
+- A **corpus** — the documents the system can return.
+- A set of **queries** — representations of information needs.
+- **Relevance judgments** — for each (query, document) pair we care about, a label saying how relevant that document is to that query. Binary (relevant / not) or graded (0–3, 0–4).
 
-What changes is how you define "good":
+Given those, your system produces a **run**: a ranked list of documents for each query. A metric converts the run + the judgments into a single number per query, which you then average across queries.
 
-- **Did we find anything relevant at all?** → hit@k
-- **Did we find most of the relevant things?** → recall@k
-- **How many of our top results were relevant?** → precision@k
-- **How quickly did we get to the first good result?** → MRR
-- **How well did we order the relevant things?** → NDCG, MAP
+The hard part of offline IR evaluation is rarely the metric — it's getting honest judgments at scale. TREC's pooling protocol partly solved this in the 1990s by judging only the documents that appeared in the top-k of *any* submitted system. Click logs and LLM-as-judge partly solve it today, with different distortions.
 
-The right metric depends on the *job your retriever is doing*. A search box where the user picks one result is a different problem from a recall layer feeding a ranker, which is a different problem again from a recommender that surfaces ten items at once.
+The metrics themselves are simple. The judgments aren't.
 
-## hit@k, recall@k, precision@k — the simple ones
+## what we measure
 
-The cheapest metrics. They treat relevance as **binary** (relevant or not) and ignore order *within* the top-k.
+Four metrics that cover almost all offline IR evaluation:
 
-- **hit@k**: 1 if at least one relevant result is in the top-k, else 0. Average across queries. Tells you *did the user have any chance at all.*
-- **recall@k**: (# relevant in top-k) / (# total relevant). Tells you *what fraction of the good stuff we surfaced.*
-- **precision@k**: (# relevant in top-k) / k. Tells you *how clean our top-k was.*
+| metric | judgments | scope | the question it asks |
+|---|---|---|---|
+| recall@k | binary | full top-k | did we surface the relevant docs anywhere in the top k? |
+| precision@k | binary | full top-k | of our top k, how many are actually relevant? |
+| MRR | binary | first hit only | how far did the user have to scroll for the first good answer? |
+| NDCG@k | graded | full top-k | how well did we *order* the relevant docs? |
 
-These are most useful when you're building the **recall stage** of a two-stage system. There you only care whether the right candidates are in the pool — the second-stage ranker decides their order. Recall@100 or recall@500 is the contract between stages.
+Each metric is a lens on the same underlying judgments, picked to match a particular shape of information need.
 
-They're a poor fit for the user-facing ranker, because position matters and they don't see it. A result at rank 1 and a result at rank 10 score the same.
+## recall@k and precision@k
+
+The two oldest metrics in IR, and still the right starting point.
+
+**Recall@k** = (# relevant in top-k) / (total # relevant in the corpus). *What fraction of the answers were surfaced.*
+
+**Precision@k** = (# relevant in top-k) / k. *What fraction of the top-k are actually answers.*
+
+The two trade off. As you grow k, recall goes up monotonically (you can only find more); precision usually goes down (you're including weaker matches). The right balance depends on the information need:
+
+- **Known-item search** (the user is looking for one specific document they know exists): precision@1 is everything. Recall is binary — either it's at rank 1 or it isn't.
+- **Topical / ad-hoc search** (the user wants to read up on a topic): precision@10, recall@10. Both matter.
+- **Exhaustive / scholarly search** (the user wants every relevant paper): recall@100, recall@1000 dominate.
+- **Recall stage of a multi-stage system** (cheap retriever feeding an expensive re-ranker): recall@k where k = size of the candidate pool. Precision doesn't matter — that's the re-ranker's job.
+
+Try it:
+
+<div data-widget="precision-recall-calc"></div>
+
+Toggle a few high-rank results off and watch precision drop. Bump the total-relevant number up and watch recall fall. The metrics are dead simple; the interesting thing is *what they trade off against each other.*
 
 ## MRR — when only the first relevant result matters
 
-**Mean Reciprocal Rank** asks: *how far down the list did the user have to scan to hit the first relevant thing?*
-
-For each query, find the rank of the first relevant result. Take its reciprocal: `1/rank`. If no relevant result was returned, that query's score is 0. Average across queries.
+**Mean Reciprocal Rank.** For each query, find the rank of the *first* relevant result. Take its reciprocal. Average across queries.
 
 ```
-MRR = (1/|Q|) · Σ_q (1 / rank_q)
+MRR = (1/|Q|) · Σ_q (1 / rank_q)        // rank_q = 0 if no relevant result, contributes 0
 ```
 
 - rank 1 → 1.000
@@ -55,30 +73,29 @@ MRR = (1/|Q|) · Σ_q (1 / rank_q)
 - rank 10 → 0.100
 - not found → 0
 
-The reciprocal makes MRR very sensitive to the top positions. Moving a result from rank 5 to rank 1 is worth a lot more than moving it from rank 50 to rank 46.
+The reciprocal makes MRR very top-heavy. Moving a result from rank 5 to rank 1 is worth a lot more than moving it from rank 50 to rank 46.
 
-**Use MRR when:**
-- The user wants one answer (a search box, a tool autocomplete, a "did you mean" suggestion).
-- There's usually exactly one correct result per query.
-- You don't care about results beyond the first relevant one.
+MRR is the right metric when the information need has the shape **"there's one right answer; how fast did we get it?"**:
 
-**Don't use MRR when:**
-- The user is browsing multiple results (you'll be blind to everything except the first).
-- Relevance has degrees (MRR is binary — it ignores how relevant the other results were).
+- Navigational queries — "github settings", "w3c html spec".
+- Known-item search — the user can describe one document and just wants it.
+- Question-answering — exactly one paragraph contains the answer.
+
+It's a poor fit when the user is browsing multiple results, or when relevance has degrees. It can only see the first hit; everything past it is invisible.
 
 Try it:
 
 <div data-widget="mrr-calc"></div>
 
-Move one of the early queries' rank from 1 to 3 — watch the MRR drop. Now move a query at rank 5 to rank 2 — the same magnitude of movement, very different impact.
+Move one query's rank from 1 to 3 and watch MRR drop sharply. Now move another query from 5 to 2 — the *same magnitude of movement*, but a much bigger gain. That asymmetry is MRR's whole personality.
 
 ## NDCG — when ranking quality matters
 
-**Normalized Discounted Cumulative Gain** is the metric most modern rankers optimize against. It does three useful things at once:
+**Normalized Discounted Cumulative Gain** is the standard metric for graded judgments. It does three useful things at once:
 
-1. **Graded relevance.** Results aren't just relevant/not. They can be `0` (not relevant), `1` (marginal), `2` (relevant), `3` (highly relevant), etc. The metric uses the full scale.
-2. **Position discounting.** A result at rank 1 contributes more than the same result at rank 5. The discount is `1 / log₂(rank + 1)`.
-3. **Normalization.** The score is divided by the *best possible* score for those same relevance values, so NDCG always lives in `[0, 1]`. NDCG of 1 means "you returned the optimal ranking of these results."
+1. **Graded relevance.** Documents aren't just relevant / not. They get a score on a scale (typically 0–3 or 0–4) reflecting how well they satisfy the information need.
+2. **Position discount.** A relevant document at rank 1 contributes more than the same document at rank 5. The discount is `1 / log₂(rank + 1)`.
+3. **Normalization.** Divided by the best-possible DCG for those same scores, so NDCG always lives in `[0, 1]`. NDCG = 1.0 means "you returned the optimal ordering of these documents."
 
 The formula:
 
@@ -88,65 +105,51 @@ IDCG = DCG of the same scores sorted descending
 NDCG = DCG / IDCG
 ```
 
-The `2^rel − 1` term is the Burges variant — it weights highly-relevant results disproportionately, which matches how users actually experience search quality. (The simpler `rel_i / log₂(i+1)` form is also seen in older papers.)
+The `2^rel − 1` form (sometimes called the Burges variant) weights highly-relevant documents disproportionately, which matches how users actually experience search quality — a "perfect" answer is much more than twice as good as a "kinda related" one. The older `rel_i / log₂(i+1)` form is also seen in some literature; it's a linear weighting that under-rewards top-quality matches.
+
+NDCG@k truncates the sum at rank k. If you see NDCG reported without a k, it's usually NDCG over the full judged set per query.
 
 Try it:
 
 <div data-widget="ndcg-calc"></div>
 
-A few things to notice as you play:
+A few things worth noticing as you play:
 
-- Putting a `3` (highly relevant) at rank 1 contributes 7 to DCG. The same `3` at rank 5 contributes only ~2.7. **Position dominates.**
-- Adding more `0`s at the bottom doesn't change DCG or IDCG (they contribute zero). Adding more `0`s near the top *does* hurt — they push relevant results down.
-- NDCG = 1.0 only when your ranking equals the ideal ranking of those same scores. Note: it can equal 1.0 even when results are weak — NDCG measures *ordering*, not absolute quality. If all results are `0`, NDCG is undefined (0/0); treat it as 0 by convention.
+- A `3` (highly relevant) at rank 1 contributes 7 to DCG. The same `3` at rank 5 contributes ~2.7. **Position dominates.**
+- Adding more `0`s at the bottom doesn't change DCG or IDCG. They contribute zero; they don't hurt and don't help.
+- Adding `0`s near the top *does* hurt — they don't add DCG but they push relevant documents into lower-discount positions.
+- NDCG = 1.0 only when your ranking equals the ideal ranking of *those same scores*. NDCG measures ordering, not absolute quality. A query where every retrieved document is a `1` can have NDCG = 1.0 and still represent a weak retrieval — there's nothing better to retrieve.
+- If every document is `0`, IDCG = 0 and NDCG is undefined. Convention: treat it as 0.
 
-**Use NDCG when:**
-- You have graded relevance labels (or can synthesize them, e.g., from clicks weighted by dwell time).
-- You're optimizing a user-facing ranker where order matters.
-- You want one number per query that captures "is this ranking any good."
+NDCG is the right metric when:
+- You have graded judgments (or graded signals you trust — dwell time, satisfaction scores, structured pools).
+- The information need is topical and the user is comparing multiple results.
+- You want one number per query that captures "did we order this well."
 
-**Don't use NDCG when:**
-- You only have binary judgments — MAP or precision@k tell you more.
-- You're measuring a recall-stage retriever — use recall@k instead.
+## which metric for which information need
 
-## MAP — when binary relevance is all you have
+The question to ask isn't "which metric is best?" It's *what is the user trying to do?*
 
-**Mean Average Precision.** For each query, walk down the ranked list and average the precision@k values *computed at every rank where a relevant result appears*. Then average across queries.
-
-Worked example. Suppose for one query the top 6 results are relevant/not as: `[R, R, N, R, N, N]`. The relevant results are at ranks 1, 2, 4. Compute precision at each:
-
-- rank 1: 1/1 = 1.000
-- rank 2: 2/2 = 1.000
-- rank 4: 3/4 = 0.750
-
-Average: `(1 + 1 + 0.75) / 3 = 0.917`. That's average precision for this query. MAP is the mean of this across all queries.
-
-MAP rewards both **finding** relevant results and **ranking them near the top**. It's binary, so it can't distinguish "highly relevant" from "barely relevant" — that's what NDCG is for.
-
-**Use MAP when:**
-- You have binary relevance labels.
-- You care about the full ranked list, not just the first result (so MRR isn't enough).
-
-## which metric when, in one table
-
-| your job | metric |
+| information need | best metric |
 |---|---|
-| recall stage feeding a ranker | recall@k |
-| user-facing ranker, graded labels | NDCG@k |
-| user-facing ranker, binary labels | MAP, precision@k |
-| one-answer search (autocomplete, jump-to) | MRR |
-| "did we surface anything?" | hit@k |
-| diagnosing why NDCG moved | look at per-position contributions (the calculator above) |
+| navigational / known-item (one right answer) | MRR, recall@1, precision@1 |
+| ad-hoc topical search (browse multiple results) | NDCG@10, precision@10 |
+| exhaustive / scholarly search (find everything relevant) | recall@100, recall@1000 |
+| recall stage feeding a re-ranker | recall@k, where k = pool size |
+| graded judgments available | NDCG |
+| only binary signals (clicks, relevance flags) | precision@k, MRR, MAP |
 
-## a few things you only learn after shipping
+Pick the metric that mirrors the information need, not the one that gives the prettiest number.
 
-A few things I keep relearning when these metrics start driving real decisions:
+## a few things about offline eval to keep in mind
 
-- **The offline metric is a proxy, not the truth.** A 2-point NDCG gain in the eval set that doesn't move CTR online means your eval set wasn't representative of production traffic. Re-check the labels and the query mix before celebrating.
-- **Average everything per-query, not per-result.** A few queries with thousands of relevant results will dominate any metric averaged the wrong way. Normalize first, then average across queries.
-- **Confidence intervals matter.** A 0.005 NDCG difference between two systems is noise unless you've measured it with enough queries and paired-bootstrapped a CI. "Bigger number" isn't progress.
-- **Eval-set drift is real.** Your eval queries age. Refresh them on a calendar, or they'll quietly stop predicting reality.
+The metrics are the easy part. The judgments — and trusting them — are where the work lives:
 
-Build the offline harness before you build the ranker. The harness is the part that compounds; the ranker is the part that changes every quarter.
+- **Unjudged ≠ not relevant.** If your judgments came from pooling an older system, a new system that finds a document at rank 30 that the old pool never included may look worse than it is. That document has no judgment, not a judgment of "not relevant." This is the dominant failure mode of using static test collections to evaluate fundamentally different systems (BM25 → dense → hybrid).
+- **Average per query, not per document.** A few queries with hundreds of judged documents will dominate any naively-averaged metric. Always: compute the metric per query, then average (typically equal-weighted) across queries.
+- **Confidence intervals matter.** A 0.005 NDCG difference between two systems is noise unless you've measured it with enough queries and paired-bootstrapped a CI. "Bigger number" isn't progress without that.
+- **Test collections age.** Query distributions drift, the corpus changes, judged documents get deleted, judgments grow stale. Refresh on a calendar, or your eval quietly stops predicting reality.
+
+Build the eval before you build the system. The eval compounds; the system changes every quarter.
 
 — v
