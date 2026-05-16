@@ -1,7 +1,9 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState, createElement } from 'react'
+import { createRoot } from 'react-dom/client'
 import { marked } from 'marked'
 import { profile } from './data'
 import { posts, visiblePosts } from './loadPosts'
+import { widgets } from './widgets'
 
 const lastEdit = visiblePosts[0]?.date || posts[0]?.date || ''
 
@@ -261,7 +263,28 @@ function Footer() {
 
 function Body({ markdown }) {
   const html = useMemo(() => marked.parse(markdown || ''), [markdown])
-  return <div className="post-body" dangerouslySetInnerHTML={{ __html: html }} />
+  const ref = useRef(null)
+
+  useEffect(() => {
+    if (!ref.current) return
+    const placeholders = ref.current.querySelectorAll('[data-widget]')
+    const roots = []
+    placeholders.forEach((el) => {
+      const name = el.dataset.widget
+      const Widget = widgets[name]
+      if (!Widget) return
+      const root = createRoot(el)
+      root.render(createElement(Widget))
+      roots.push(root)
+    })
+    return () => {
+      roots.forEach((r) => {
+        try { r.unmount() } catch {}
+      })
+    }
+  }, [html])
+
+  return <div className="post-body" ref={ref} dangerouslySetInnerHTML={{ __html: html }} />
 }
 
 function Post({ slug }) {
