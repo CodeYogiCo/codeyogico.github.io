@@ -37,15 +37,47 @@ function useUtcClock() {
   return `${hh}:${mm}:${ss} UTC`
 }
 
-function useHashRoute() {
-  const read = () => window.location.hash || ''
-  const [hash, setHash] = useState(read)
+function parseRoute() {
+  const pathMatch = window.location.pathname.match(/^\/posts\/([^/]+)\/?$/)
+  if (pathMatch) return { name: 'post', slug: decodeURIComponent(pathMatch[1]) }
+  const hashMatch = window.location.hash.match(/^#\/post\/(.+)$/)
+  if (hashMatch) return { name: 'post', slug: decodeURIComponent(hashMatch[1]) }
+  return { name: 'index' }
+}
+
+function useRoute() {
+  const [route, setRoute] = useState(parseRoute)
   useEffect(() => {
-    const onChange = () => setHash(read())
+    const onChange = () => setRoute(parseRoute())
     window.addEventListener('hashchange', onChange)
-    return () => window.removeEventListener('hashchange', onChange)
+    window.addEventListener('popstate', onChange)
+    return () => {
+      window.removeEventListener('hashchange', onChange)
+      window.removeEventListener('popstate', onChange)
+    }
   }, [])
-  return hash
+  return route
+}
+
+function navigateTo(href) {
+  window.history.pushState({}, '', href)
+  window.dispatchEvent(new PopStateEvent('popstate'))
+}
+
+function Link({ href, children, ...rest }) {
+  return (
+    <a
+      href={href}
+      onClick={(e) => {
+        if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey || e.button !== 0) return
+        e.preventDefault()
+        navigateTo(href)
+      }}
+      {...rest}
+    >
+      {children}
+    </a>
+  )
 }
 
 function StatusBar({ theme, onToggleTheme, mode }) {
@@ -59,7 +91,7 @@ function StatusBar({ theme, onToggleTheme, mode }) {
       </div>
       <div className="right">
         {mode === 'post' ? (
-          <a href="#">← all writing</a>
+          <Link href="/">← all writing</Link>
         ) : (
           <>
             <a className="nav-link" href="#writing">writing</a>
@@ -150,7 +182,7 @@ function PostsList() {
             <span className="date">{p.date}</span>
             <span className="tag">{p.tag}</span>
             <span className="title">
-              <a href={`#/post/${p.slug}`}>{p.title}</a>
+              <Link href={`/posts/${p.slug}/`}>{p.title}</Link>
             </span>
             <span className="read">{p.read} →</span>
           </li>
@@ -245,7 +277,7 @@ function Post({ slug }) {
 
   return (
     <main className="page" id="top">
-      <a href="#" className="back-link">← back to index</a>
+      <Link href="/" className="back-link">← back to index</Link>
       <article>
         <div className="post-meta">
           <span style={{ color: 'var(--accent)' }}>{post.tag}</span>
@@ -259,18 +291,18 @@ function Post({ slug }) {
       <nav className="post-nav">
         <div>
           {prev && (
-            <a href={`#/post/${prev.slug}`}>
+            <Link href={`/posts/${prev.slug}/`}>
               <div className="label">← older</div>
               <div>{prev.title}</div>
-            </a>
+            </Link>
           )}
         </div>
         <div className="next">
           {next && (
-            <a href={`#/post/${next.slug}`}>
+            <Link href={`/posts/${next.slug}/`}>
               <div className="label">newer →</div>
               <div>{next.title}</div>
-            </a>
+            </Link>
           )}
         </div>
       </nav>
@@ -289,16 +321,9 @@ function Index() {
   )
 }
 
-function parseRoute(hash) {
-  const m = hash.match(/^#\/post\/(.+)$/)
-  if (m) return { name: 'post', slug: decodeURIComponent(m[1]) }
-  return { name: 'index' }
-}
-
 export default function App() {
   const [theme, toggleTheme] = useTheme()
-  const hash = useHashRoute()
-  const route = parseRoute(hash)
+  const route = useRoute()
 
   return (
     <>

@@ -59,7 +59,7 @@ const lastBuildDate = posts[0]?.date ? toRfc822(posts[0].date) : new Date().toUT
 
 const items = posts
   .map((p) => {
-    const url = `${SITE_URL}/#/post/${p.slug}`
+    const url = `${SITE_URL}/posts/${p.slug}/`
     const html = marked.parse(p.body || '')
     return `    <item>
       <title>${escapeXml(p.title)}</title>
