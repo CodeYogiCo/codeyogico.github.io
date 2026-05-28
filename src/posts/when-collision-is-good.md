@@ -29,64 +29,27 @@ Those four strings produce four different hash values, four separate cache entri
 
 The question isn't whether this waste exists. It's whether we can do anything about it without making wrong cache hits a thing.
 
-<svg viewBox="0 0 640 280" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Exact-match cache vs LSH cache memory comparison" style="display: block; width: 100%; max-width: 640px; height: auto; margin: 28px auto;">
-  <style>
-    .cv-title  { fill: var(--ink); font-family: var(--mono); font-size: 11px; font-weight: 600; text-anchor: middle; }
-    .cv-label  { fill: var(--ink); font-family: var(--mono); font-size: 10px; }
-    .cv-faint  { fill: var(--ink-faint); font-family: var(--mono); font-size: 9.5px; }
-    .cv-box    { fill: var(--bg-alt); stroke: var(--rule); stroke-width: 1; }
-    .cv-box-ac { fill: var(--accent); stroke: var(--accent); stroke-width: 1; opacity: 0.15; }
-    .cv-box-hi { fill: var(--accent); stroke: var(--accent); stroke-width: 1; }
-    .cv-arrow  { stroke: var(--ink-soft); stroke-width: 1; marker-end: url(#arr); fill: none; }
-    .cv-divider { stroke: var(--rule); stroke-width: 1; stroke-dasharray: 3 4; }
-  </style>
-  <defs>
-    <marker id="arr" markerWidth="6" markerHeight="6" refX="3" refY="3" orient="auto">
-      <path d="M0,0 L6,3 L0,6 Z" fill="var(--ink-soft)" />
-    </marker>
-  </defs>
+```
+exact-match cache
+─────────────────
+"nike running shoes"     →  [products]
+"nike running shoe"      →  [products]
+"running shoes nike"     →  [products]
+"nike running sneakers"  →  [products]
 
-  <text class="cv-title" x="155" y="22">exact-match cache</text>
-  <text class="cv-title" x="490" y="22">LSH cache</text>
-  <line class="cv-divider" x1="320" y1="10" x2="320" y2="270" />
+   4 cache entries — same data, copied 4 times
 
-  <text class="cv-label" x="10" y="52">"nike running shoes"</text>
-  <text class="cv-label" x="10" y="82">"nike running shoe"</text>
-  <text class="cv-label" x="10" y="112">"running shoes nike"</text>
-  <text class="cv-label" x="10" y="142">"nike running sneakers"</text>
 
-  <rect class="cv-box" x="205" y="38" width="72" height="22" rx="3"/>
-  <text class="cv-faint" x="241" y="53" text-anchor="middle">products ①</text>
-  <rect class="cv-box" x="205" y="68" width="72" height="22" rx="3"/>
-  <text class="cv-faint" x="241" y="83" text-anchor="middle">products ①</text>
-  <rect class="cv-box" x="205" y="98" width="72" height="22" rx="3"/>
-  <text class="cv-faint" x="241" y="113" text-anchor="middle">products ①</text>
-  <rect class="cv-box" x="205" y="128" width="72" height="22" rx="3"/>
-  <text class="cv-faint" x="241" y="143" text-anchor="middle">products ①</text>
+LSH cache
+─────────
+"nike running shoes"     ╮
+"nike running shoe"      │
+                         ├──→  [products]
+"running shoes nike"     │
+"nike running sneakers"  ╯
 
-  <path class="cv-arrow" d="M185,49 L204,49" />
-  <path class="cv-arrow" d="M185,79 L204,79" />
-  <path class="cv-arrow" d="M185,109 L204,109" />
-  <path class="cv-arrow" d="M185,139 L204,139" />
-
-  <text class="cv-faint" x="160" y="180">4 cache entries — same data</text>
-
-  <text class="cv-label" x="335" y="52">"nike running shoes"</text>
-  <text class="cv-label" x="335" y="82">"nike running shoe"</text>
-  <text class="cv-label" x="335" y="112">"running shoes nike"</text>
-  <text class="cv-label" x="335" y="142">"nike running sneakers"</text>
-
-  <rect class="cv-box-hi" x="570" y="78" width="58" height="52" rx="3"/>
-  <text class="cv-faint" x="599" y="100" text-anchor="middle" style="fill: var(--ink)">products</text>
-  <text class="cv-faint" x="599" y="116" text-anchor="middle" style="fill: var(--ink)">①</text>
-
-  <path class="cv-arrow" d="M510,49 Q545,49 569,89" />
-  <path class="cv-arrow" d="M510,79 Q545,79 569,99" />
-  <path class="cv-arrow" d="M510,109 Q545,109 569,109" />
-  <path class="cv-arrow" d="M510,139 Q545,139 569,119" />
-
-  <text class="cv-faint" x="465" y="180">1 cache entry — shared</text>
-</svg>
+   1 cache entry — shared across all 4 queries
+```
 
 ## jaccard similarity: a way to measure "same thing"
 
@@ -138,7 +101,7 @@ Two things worth noticing:
 
 First, the S-curve crossover falls at the threshold ratio. With 18/36 votes (50%), the crossover is at Jaccard 0.5 — queries more than 50% similar get matched, queries less than 50% similar don't. Shift the threshold to 27/36 (75%) and the crossover shifts right.
 
-Second, more hash functions means a *steeper* curve — a sharper boundary between "matched" and "not matched". Fewer functions gives a softer, fuzzier boundary. The RFC default of 36 with threshold 18 gives a curve steep enough to reliably separate similar from dissimilar while staying cheap to compute.
+Second, more hash functions means a *steeper* curve — a sharper boundary between "matched" and "not matched". Fewer functions gives a softer, fuzzier boundary. A common choice — 36 functions with a vote threshold of 18 — gives a curve steep enough to reliably separate similar from dissimilar while staying cheap to compute.
 
 ## how the system is actually built
 
@@ -198,15 +161,15 @@ Consider:
 
 A word like "shoes" carries more semantic meaning about the product category than a brand name. If we weight tokens by their importance — category words higher, brand names and modifiers lower — we get a similarity score that better tracks "would these two queries return the same results?"
 
-This is **weighted Jaccard**. Amazon's implementation uses a Named Entity Recognition model to tag tokens as category, brand, or modifier, and assigns weights accordingly. If you're building at Target, you likely already have a query tagger in the query understanding pipeline. Reuse it. If you don't, a POS tagger that boosts nouns and discounts adjectives gets you 80% of the way there.
+This is **weighted Jaccard**. A typical implementation uses a tagger to label each token by its role — head noun, modifier, brand, and so on — and assigns weights to match. If your system already has a query tagger somewhere in the pipeline, reuse it. If not, a basic part-of-speech tagger that boosts nouns and discounts adjectives gets you 80% of the way there.
 
 The math of weighted MinHash is slightly more involved (you weight the random permutation by token weight), but any decent library handles it — `datasketch` in Python, for instance. You pass in token weights, it gives you a MinHash. The rest of the system doesn't change.
 
 ## the numbers
 
-**Cache capacity.** If a cluster of 4–5 near-duplicate queries now shares one cache entry instead of four, and the average cluster size in your query log is 3–5 queries, you're storing 3–5x fewer entries for the same result coverage. Amazon reported ~3x improvement in effective cache capacity.
+**Cache capacity.** If a cluster of 4–5 near-duplicate queries now shares one cache entry instead of four, and the average cluster size in your query log is 3–5 queries, you're storing 3–5x fewer entries for the same result coverage. In practice this lands around a ~3x improvement in effective cache capacity.
 
-**Hit rate on tail queries.** This is where the gains are biggest. Head queries (the top 1000 searches) already have high hit rates under exact-match caching because users type them verbatim repeatedly. Tail queries — rare, varied, one-off phrasings — are where the cache fails today. LSH clustering effectively "borrows" hits from the canonical query to cover all the tail variations. Amazon reported 250% F1 improvement on long-tail queries.
+**Hit rate on tail queries.** This is where the gains are biggest. Head queries (the top 1000 searches) already have high hit rates under exact-match caching because users type them verbatim repeatedly. Tail queries — rare, varied, one-off phrasings — are where the cache fails today. LSH clustering effectively "borrows" hits from the canonical query to cover all the tail variations. On long-tail traffic, reported gains run into the multiple-x range on F1 — often cited around 250%.
 
 **Latency.** The cost is real. An exact-match cache lookup is one hash + one table read (~0.1 ms). LSH lookup adds 36 hashes + 36 table reads + a vote tally (~2 ms). That's a 20x increase in cache lookup overhead. The question is whether that 2 ms is acceptable given the p99 savings from serving more cache hits (and skipping 50 ms+ retrieval pipelines on misses). For most search SLOs, it is — but measure it before you commit.
 
