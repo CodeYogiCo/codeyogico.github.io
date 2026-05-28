@@ -29,13 +29,12 @@ Those four strings produce four different hash values, four separate cache entri
 
 The question isn't whether this waste exists. It's whether we can do anything about it without making wrong cache hits a thing.
 
-<svg viewBox="0 0 640 280" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Exact-match cache vs LSH cache memory comparison" style="display: block; width: 100%; max-width: 640px; height: auto; margin: 28px auto;">
+<svg viewBox="0 0 460 440" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Exact-match cache vs LSH cache memory comparison" style="display: block; width: 100%; max-width: 500px; height: auto; margin: 28px auto;">
   <style>
-    .cv-title  { fill: var(--ink); font-family: var(--mono); font-size: 11px; font-weight: 600; text-anchor: middle; }
-    .cv-label  { fill: var(--ink); font-family: var(--mono); font-size: 10px; }
-    .cv-faint  { fill: var(--ink-faint); font-family: var(--mono); font-size: 9.5px; }
+    .cv-title  { fill: var(--ink); font-family: var(--mono); font-size: 13px; font-weight: 600; }
+    .cv-label  { fill: var(--ink); font-family: var(--mono); font-size: 12px; }
+    .cv-faint  { fill: var(--ink-faint); font-family: var(--mono); font-size: 11px; }
     .cv-box    { fill: var(--bg-alt); stroke: var(--rule); stroke-width: 1; }
-    .cv-box-ac { fill: var(--accent); stroke: var(--accent); stroke-width: 1; opacity: 0.15; }
     .cv-box-hi { fill: var(--accent); stroke: var(--accent); stroke-width: 1; }
     .cv-arrow  { stroke: var(--ink-soft); stroke-width: 1; marker-end: url(#arr); fill: none; }
     .cv-divider { stroke: var(--rule); stroke-width: 1; stroke-dasharray: 3 4; }
@@ -46,46 +45,48 @@ The question isn't whether this waste exists. It's whether we can do anything ab
     </marker>
   </defs>
 
-  <text class="cv-title" x="155" y="22">exact-match cache</text>
-  <text class="cv-title" x="490" y="22">LSH cache</text>
-  <line class="cv-divider" x1="320" y1="10" x2="320" y2="270" />
+  <text class="cv-title" x="20" y="24">exact-match cache</text>
 
-  <text class="cv-label" x="10" y="52">"nike running shoes"</text>
-  <text class="cv-label" x="10" y="82">"nike running shoe"</text>
-  <text class="cv-label" x="10" y="112">"running shoes nike"</text>
-  <text class="cv-label" x="10" y="142">"nike running sneakers"</text>
+  <text class="cv-label" x="20" y="62">"nike running shoes"</text>
+  <text class="cv-label" x="20" y="92">"nike running shoe"</text>
+  <text class="cv-label" x="20" y="122">"running shoes nike"</text>
+  <text class="cv-label" x="20" y="152">"nike running sneakers"</text>
 
-  <rect class="cv-box" x="205" y="38" width="72" height="22" rx="3"/>
-  <text class="cv-faint" x="241" y="53" text-anchor="middle">products ①</text>
-  <rect class="cv-box" x="205" y="68" width="72" height="22" rx="3"/>
-  <text class="cv-faint" x="241" y="83" text-anchor="middle">products ①</text>
-  <rect class="cv-box" x="205" y="98" width="72" height="22" rx="3"/>
-  <text class="cv-faint" x="241" y="113" text-anchor="middle">products ①</text>
-  <rect class="cv-box" x="205" y="128" width="72" height="22" rx="3"/>
-  <text class="cv-faint" x="241" y="143" text-anchor="middle">products ①</text>
+  <rect class="cv-box" x="310" y="48" width="120" height="22" rx="3"/>
+  <text class="cv-faint" x="370" y="63" text-anchor="middle">products ①</text>
+  <rect class="cv-box" x="310" y="78" width="120" height="22" rx="3"/>
+  <text class="cv-faint" x="370" y="93" text-anchor="middle">products ①</text>
+  <rect class="cv-box" x="310" y="108" width="120" height="22" rx="3"/>
+  <text class="cv-faint" x="370" y="123" text-anchor="middle">products ①</text>
+  <rect class="cv-box" x="310" y="138" width="120" height="22" rx="3"/>
+  <text class="cv-faint" x="370" y="153" text-anchor="middle">products ①</text>
 
-  <path class="cv-arrow" d="M185,49 L204,49" />
-  <path class="cv-arrow" d="M185,79 L204,79" />
-  <path class="cv-arrow" d="M185,109 L204,109" />
-  <path class="cv-arrow" d="M185,139 L204,139" />
+  <path class="cv-arrow" d="M220,58 L309,59" />
+  <path class="cv-arrow" d="M220,88 L309,89" />
+  <path class="cv-arrow" d="M220,118 L309,119" />
+  <path class="cv-arrow" d="M220,148 L309,149" />
 
-  <text class="cv-faint" x="160" y="180">4 cache entries — same data</text>
+  <text class="cv-faint" x="20" y="190">4 cache entries — same data</text>
 
-  <text class="cv-label" x="335" y="52">"nike running shoes"</text>
-  <text class="cv-label" x="335" y="82">"nike running shoe"</text>
-  <text class="cv-label" x="335" y="112">"running shoes nike"</text>
-  <text class="cv-label" x="335" y="142">"nike running sneakers"</text>
+  <line class="cv-divider" x1="20" y1="215" x2="440" y2="215" />
 
-  <rect class="cv-box-hi" x="570" y="78" width="58" height="52" rx="3"/>
-  <text class="cv-faint" x="599" y="100" text-anchor="middle" style="fill: var(--ink)">products</text>
-  <text class="cv-faint" x="599" y="116" text-anchor="middle" style="fill: var(--ink)">①</text>
+  <text class="cv-title" x="20" y="250">LSH cache</text>
 
-  <path class="cv-arrow" d="M510,49 Q545,49 569,89" />
-  <path class="cv-arrow" d="M510,79 Q545,79 569,99" />
-  <path class="cv-arrow" d="M510,109 Q545,109 569,109" />
-  <path class="cv-arrow" d="M510,139 Q545,139 569,119" />
+  <text class="cv-label" x="20" y="290">"nike running shoes"</text>
+  <text class="cv-label" x="20" y="320">"nike running shoe"</text>
+  <text class="cv-label" x="20" y="350">"running shoes nike"</text>
+  <text class="cv-label" x="20" y="380">"nike running sneakers"</text>
 
-  <text class="cv-faint" x="465" y="180">1 cache entry — shared</text>
+  <rect class="cv-box-hi" x="320" y="295" width="110" height="80" rx="3"/>
+  <text class="cv-label" x="375" y="330" text-anchor="middle" style="fill: var(--ink)">products</text>
+  <text class="cv-label" x="375" y="350" text-anchor="middle" style="fill: var(--ink)">①</text>
+
+  <path class="cv-arrow" d="M220,286 Q275,286 319,310" />
+  <path class="cv-arrow" d="M220,316 Q275,316 319,325" />
+  <path class="cv-arrow" d="M220,346 Q275,346 319,345" />
+  <path class="cv-arrow" d="M220,376 Q275,376 319,360" />
+
+  <text class="cv-faint" x="20" y="415">1 cache entry — shared</text>
 </svg>
 
 ## jaccard similarity: a way to measure "same thing"
