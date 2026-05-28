@@ -138,7 +138,7 @@ Two things worth noticing:
 
 First, the S-curve crossover falls at the threshold ratio. With 18/36 votes (50%), the crossover is at Jaccard 0.5 — queries more than 50% similar get matched, queries less than 50% similar don't. Shift the threshold to 27/36 (75%) and the crossover shifts right.
 
-Second, more hash functions means a *steeper* curve — a sharper boundary between "matched" and "not matched". Fewer functions gives a softer, fuzzier boundary. The RFC default of 36 with threshold 18 gives a curve steep enough to reliably separate similar from dissimilar while staying cheap to compute.
+Second, more hash functions means a *steeper* curve — a sharper boundary between "matched" and "not matched". Fewer functions gives a softer, fuzzier boundary. A common choice — 36 functions with a vote threshold of 18 — gives a curve steep enough to reliably separate similar from dissimilar while staying cheap to compute.
 
 ## how the system is actually built
 
@@ -198,15 +198,15 @@ Consider:
 
 A word like "shoes" carries more semantic meaning about the product category than a brand name. If we weight tokens by their importance — category words higher, brand names and modifiers lower — we get a similarity score that better tracks "would these two queries return the same results?"
 
-This is **weighted Jaccard**. Amazon's implementation uses a Named Entity Recognition model to tag tokens as category, brand, or modifier, and assigns weights accordingly. If you're building at Target, you likely already have a query tagger in the query understanding pipeline. Reuse it. If you don't, a POS tagger that boosts nouns and discounts adjectives gets you 80% of the way there.
+This is **weighted Jaccard**. A typical implementation uses a tagger to label each token by its role — head noun, modifier, brand, and so on — and assigns weights to match. If your system already has a query tagger somewhere in the pipeline, reuse it. If not, a basic part-of-speech tagger that boosts nouns and discounts adjectives gets you 80% of the way there.
 
 The math of weighted MinHash is slightly more involved (you weight the random permutation by token weight), but any decent library handles it — `datasketch` in Python, for instance. You pass in token weights, it gives you a MinHash. The rest of the system doesn't change.
 
 ## the numbers
 
-**Cache capacity.** If a cluster of 4–5 near-duplicate queries now shares one cache entry instead of four, and the average cluster size in your query log is 3–5 queries, you're storing 3–5x fewer entries for the same result coverage. Amazon reported ~3x improvement in effective cache capacity.
+**Cache capacity.** If a cluster of 4–5 near-duplicate queries now shares one cache entry instead of four, and the average cluster size in your query log is 3–5 queries, you're storing 3–5x fewer entries for the same result coverage. In practice this lands around a ~3x improvement in effective cache capacity.
 
-**Hit rate on tail queries.** This is where the gains are biggest. Head queries (the top 1000 searches) already have high hit rates under exact-match caching because users type them verbatim repeatedly. Tail queries — rare, varied, one-off phrasings — are where the cache fails today. LSH clustering effectively "borrows" hits from the canonical query to cover all the tail variations. Amazon reported 250% F1 improvement on long-tail queries.
+**Hit rate on tail queries.** This is where the gains are biggest. Head queries (the top 1000 searches) already have high hit rates under exact-match caching because users type them verbatim repeatedly. Tail queries — rare, varied, one-off phrasings — are where the cache fails today. LSH clustering effectively "borrows" hits from the canonical query to cover all the tail variations. On long-tail traffic, reported gains run into the multiple-x range on F1 — often cited around 250%.
 
 **Latency.** The cost is real. An exact-match cache lookup is one hash + one table read (~0.1 ms). LSH lookup adds 36 hashes + 36 table reads + a vote tally (~2 ms). That's a 20x increase in cache lookup overhead. The question is whether that 2 ms is acceptable given the p99 savings from serving more cache hits (and skipping 50 ms+ retrieval pipelines on misses). For most search SLOs, it is — but measure it before you commit.
 
