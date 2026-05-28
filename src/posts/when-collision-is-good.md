@@ -3,7 +3,7 @@ date: 2026-05-27
 tag: search
 title: "When collision is good: semantic query caching with LSH"
 read: 11 min
-deck: "Exact-match caches waste memory storing the same products under dozens of near-identical query strings. Here's how Locality-Sensitive Hashing fixes that — by designing hash collisions in on purpose."
+deck: "Exact-match caches waste memory storing the same products under dozens of near-identical query strings. Here's how Locality-Sensitive Hashing fixes that — by designing hash collisions on purpose."
 ---
 
 Everyone learns the same rule on day one: hash collisions are bad. Two inputs landing in the same bucket means wasted work — longer lookup chains, unpredictable performance, security headaches. The whole point of a good hash function is to scatter inputs as randomly and evenly as possible.
@@ -23,10 +23,9 @@ The problem is that users don't type the same string twice. They type variations
 "nike running shoe"
 "running shoes nike"
 "nike running sneakers"
-"nike runners"
 ```
 
-Those five strings produce five different hash values, five separate cache entries, and five copies of essentially the same product list. At the scale of a large retailer — hundreds of millions of searches per day, billions of cached entries — this redundancy is not a rounding error. It's a significant fraction of your cache budget.
+Those four strings produce four different hash values, four separate cache entries, and four copies of essentially the same product list. At the scale of a large retailer — hundreds of millions of searches per day, billions of cached entries — this redundancy is not a rounding error. It's a significant fraction of your cache budget.
 
 The question isn't whether this waste exists. It's whether we can do anything about it without making wrong cache hits a thing.
 
