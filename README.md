@@ -93,32 +93,17 @@ Two widgets — `ViewCount` and `PinnedRepos` — are mounted directly from `App
 3. **`vite build`** — bundles to `dist/`.
 4. **`scripts/build-og.js`** — writes per-post HTML files in `dist/` with the correct OG meta tags, plus a `404.html` SPA fallback.
 
-## Analytics & per-post view counts
+## Analytics
 
-The site uses [GoatCounter](https://www.goatcounter.com/) — privacy-friendly, no cookies. The tracking script lives in `index.html` with `data-goatcounter-settings='{"no_onload": true}'`, and the app calls `goatcounter.count()` on every SPA route change (handled in `App.jsx`).
-
-Per-post view counts come from `https://codeyogico.goatcounter.com/counter/<path>.json` and render in the post meta row (next to date/read-time). This requires **"Allow viewing statistics without logging in"** to be enabled in the GoatCounter dashboard settings.
+[GoatCounter](https://www.goatcounter.com/) script in `index.html`, route-change counter in `App.jsx`. Per-post view counts rendered by `src/widgets/ViewCount.jsx`.
 
 ## Pinned GitHub repos
 
-The "github" section at the bottom of the index is generated at build time. `scripts/fetch-pinned.js` calls GitHub's GraphQL API for the pinned items on `codeyogico` (works for both User and Organization accounts) and writes `src/pinned.json`. The component (`src/widgets/PinnedRepos.jsx`) imports that file as static JSON — no client-side fetch.
-
-To deploy end-to-end:
-
-1. Create a Personal Access Token at https://github.com/settings/tokens. A classic token with no scopes is enough for public profile data.
-2. Add it as the `GH_TOKEN` repo secret at **Settings → Secrets and variables → Actions → New repository secret**.
-
-To update the displayed list later, change pinned repos on github.com/codeyogico and re-run the Deploy workflow.
+Generated at build time by `scripts/fetch-pinned.js` into `src/pinned.json`. Requires a `GH_TOKEN` repo secret.
 
 ## Deploy
 
-`.github/workflows/deploy.yml` runs on every push to `main` and via `workflow_dispatch`. It installs deps, runs `npm run build` (with `GH_TOKEN` injected from secrets), uploads `dist/` as a Pages artifact, and publishes via `actions/deploy-pages@v4`.
-
-Repo secrets:
-
-| name | purpose |
-|---|---|
-| `GH_TOKEN` | build-time GraphQL fetch for pinned repos |
+`.github/workflows/deploy.yml` runs on every push to `main`. Builds, uploads `dist/`, publishes via `actions/deploy-pages@v4`.
 
 ## Editing identity
 
