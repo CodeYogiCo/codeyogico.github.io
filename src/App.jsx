@@ -4,6 +4,7 @@ import { marked } from 'marked'
 import { profile } from './data'
 import { posts, visiblePosts } from './loadPosts'
 import { widgets } from './widgets'
+import ViewCount from './widgets/ViewCount.jsx'
 
 const lastEdit = visiblePosts[0]?.date || posts[0]?.date || ''
 
@@ -336,6 +337,7 @@ function Post({ slug }) {
           <span style={{ color: 'var(--accent)' }}>{post.tag}</span>
           <span style={{ fontVariantNumeric: 'tabular-nums' }}>{post.date}</span>
           <span>{post.read}</span>
+          <ViewCount slug={post.slug} />
         </div>
         <h1 className="post-title">{post.title}</h1>
         <p className="post-deck">{post.deck}</p>
@@ -377,6 +379,22 @@ function Index() {
 export default function App() {
   const [theme, toggleTheme] = useTheme()
   const route = useRoute()
+
+  useEffect(() => {
+    let cancelled = false
+    const fire = () => {
+      if (cancelled) return
+      if (window.goatcounter?.count) {
+        window.goatcounter.count({ path: window.location.pathname, title: document.title })
+      } else {
+        setTimeout(fire, 150)
+      }
+    }
+    fire()
+    return () => {
+      cancelled = true
+    }
+  }, [route])
 
   return (
     <>
