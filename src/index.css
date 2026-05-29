@@ -218,6 +218,50 @@ a:hover {
 }
 .posts li:hover .read { color: var(--accent); }
 
+/* ── pinned repos ──────────────────────────────────────── */
+
+.pinned { margin-top: 60px; }
+.pinned-title {
+  font-size: 12px;
+  font-weight: 500;
+  text-transform: lowercase;
+  letter-spacing: 0.06em;
+  color: var(--ink-faint);
+  margin: 0 0 14px;
+}
+.pinned-title::before { content: "## "; }
+.pinned-list { list-style: none; margin: 0; padding: 0; }
+.pinned-list li {
+  border-top: 1px dashed var(--rule);
+  padding: 10px 0;
+}
+.pinned-list li:last-child { border-bottom: 1px dashed var(--rule); }
+.pinned-card { display: block; border-bottom: 0; }
+.pinned-card:hover .pinned-name { color: var(--accent); }
+.pinned-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  font-size: 13.5px;
+}
+.pinned-name { font-weight: 500; }
+.pinned-meta {
+  display: inline-flex;
+  gap: 12px;
+  font-size: 11.5px;
+  color: var(--ink-faint);
+  white-space: nowrap;
+}
+.pinned-lang { color: var(--accent); letter-spacing: 0.04em; }
+.pinned-stars { font-variant-numeric: tabular-nums; }
+.pinned-desc {
+  margin-top: 3px;
+  font-size: 12.5px;
+  color: var(--ink-soft);
+  line-height: 1.5;
+}
+
 /* ── footer ────────────────────────────────────────────── */
 
 .footer {
