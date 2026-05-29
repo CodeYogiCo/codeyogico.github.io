@@ -5,6 +5,7 @@ import { profile } from './data'
 import { posts, visiblePosts } from './loadPosts'
 import { widgets } from './widgets'
 import ViewCount from './widgets/ViewCount.jsx'
+import PinnedRepos from './widgets/PinnedRepos.jsx'
 
 const lastEdit = visiblePosts[0]?.date || posts[0]?.date || ''
 
@@ -371,6 +372,7 @@ function Index() {
       <Identity />
       <About />
       <PostsList />
+      <PinnedRepos />
       <Footer />
     </main>
   )
