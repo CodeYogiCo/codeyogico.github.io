@@ -1,120 +1,135 @@
 ---
 date: 2026-06-03
 tag: search
-title: "Pre-filter and post-filter in vector search"
-read: 10 min
-deck: "The recall cliff, and how HNSW and ScaNN are built differently enough that pre-filtering works differently in each."
+title: "How ScaNN works"
+read: 11 min
+deck: "A walk through the three phases of ScaNN — partitioning, anisotropic quantization, and rescoring — and why each one exists."
 ---
 
-Filtered approximate nearest neighbor (ANN) search asks: find the k most similar vectors to this query *that also satisfy some predicate*. Two obvious strategies:
+Most vector indexes are solving the same problem: given a query vector `q` and a corpus of `N` vectors, find the k vectors with the highest similarity to `q` without computing all N distances. The naive approach — score every vector, sort, return top-k — is exact but doesn't scale past a few hundred thousand vectors at low latency.
 
-- **Post-filter**: run ANN over everything, take top-k, discard anything that fails the filter.
-- **Pre-filter**: apply the filter first, search only the surviving candidates.
+ScaNN (Scalable Nearest Neighbors) is Google's answer to this problem. It was open-sourced in 2020 and underpins several of Google's production retrieval systems. The reason it's worth understanding in detail is that it makes a non-obvious design choice at each phase, and understanding *why* those choices were made tells you something useful about the structure of the MIPS problem itself.
 
-Both have failure modes. Understanding them properly means understanding the internals of the indexes, because the failure mode in each case is structural — it follows directly from how the index is built.
+MIPS stands for Maximum Inner Product Search — find vectors with the highest dot product with the query. Cosine similarity reduces to this when vectors are normalized, so MIPS covers most practical similarity search.
 
-## the recall cliff in post-filter
+## the three phases
 
-Post-filter works when the filter is broad. The trouble starts when the filter gets selective. Say you have 1M vectors and the filter passes 0.1% — 1,000 items. Post-filter runs ANN over the full 1M and returns top-10. Statistically, around 0 of those 10 will be in your 1,000-item filtered set. You return almost nothing.
+ScaNN decomposes search into three sequential phases:
 
-The fix is to over-fetch: retrieve top-5,000, filter, return 10. This works at moderate selectivity but the over-fetch multiplier grows with selectivity, and at some point you're doing more work than a brute-force search over the filtered set would have cost. That's the recall cliff — the point where over-fetching stops being cheaper than an alternative strategy.
+1. **Partitioning** — reduce the candidate pool by only searching the most promising partitions of the corpus.
+2. **Scoring** — approximate inner products for all candidates in those partitions, quickly.
+3. **Rescoring** — rerank the top candidates with exact inner products.
 
-## how HNSW is constructed
+Each phase is independently optional, but for large corpora (100k+ vectors) you want all three. The combination gives you the accuracy of exact search at a fraction of the cost.
 
-HNSW builds a layered proximity graph. When inserting a vector `v`:
+## partitioning
 
-1. Draw a random maximum layer `l` for `v` from an exponential distribution: `l = ⌊−ln(random()) × mL⌋`. Most vectors land at layer 0; a few reach layer 1; fewer still reach layer 2; and so on.
-2. Starting from the top layer, do a greedy descent to find the insertion neighborhood at each level. At layers above `l`, just descend toward `v` to find a good entry point. At layers from `l` down to 0, connect `v` to its M nearest neighbors found by a beam search of width `ef_construction`.
-3. The resulting graph has a hierarchy: upper layers have few nodes with long-range edges (good for fast global navigation), layer 0 has all nodes with short-range edges (good for precise local search).
+The partitioning phase divides the corpus into `k` clusters using k-means. Each database vector `x` is assigned to the centroid it is closest to. At index time this is just training a k-means model. At query time the payoff comes: rather than scoring all N vectors, ScaNN scores all `k` centroids first, picks the top `t` clusters, and only runs the inner scoring phase on vectors inside those clusters.
 
-**Search** follows the same structure. Given query `q`:
+If `k = √N`, then each cluster contains roughly `√N` vectors. Searching `t` clusters means scoring `t·√N` vectors instead of N. With `t = 0.1·k`, that's `0.1·√N·√N = 0.1N` — a 10x reduction in work before the expensive scoring phase even starts.
 
-1. Enter at the top layer's entry point. Greedily descend through each layer, moving to whichever neighbor is closest to `q`, until you reach layer 0.
-2. At layer 0, run beam search with exploration width `ef`: maintain a candidate priority queue `C` and a result set `W`. For each candidate popped from `C`, expand its neighbors, compute distances to `q`, and add promising ones back to `C` and `W`. Stop when no unvisited candidate in `C` is closer to `q` than the worst result in `W`.
-3. Return top-k from `W`.
+The parameter `t` (`num_leaves_to_search` in the ScaNN API) is the primary recall-vs-speed dial. More clusters searched means higher recall and higher latency. Typical values search 1–10% of clusters.
 
-The parameter `ef` trades recall for speed: a larger `ef` explores more nodes and finds better approximate neighbors, at higher latency.
+The rule of thumb `k ≈ √N` comes from minimizing the total work: `k` centroids to score in phase 1, `N/k` vectors per cluster to score in phase 2. Total work is roughly `k + N/k`, which is minimized at `k = √N`. At that point both terms equal `√N`, giving `O(√N)` total work versus `O(N)` for brute force.
 
-## why pre-filtering breaks HNSW
+## scoring: why standard quantization isn't enough
 
-The upper layers exist to route you quickly to the right neighborhood. Layer 0 then does precise local search. Both depend on the graph being fully traversable — the greedy descent in the upper layers follows edges without restriction, and the beam search at layer 0 expands into any neighbor.
+Inside each selected cluster, ScaNN needs to score every vector. A corpus of 10M vectors with 768 dimensions, stored as float32, is 30GB. Computing exact dot products for all vectors in the top-t clusters is expensive even after partitioning. The scoring phase compresses those vectors.
 
-Naive pre-filtering — only visiting nodes that pass the predicate `P(v)` — breaks both phases. In the upper layers, if filtered-out nodes are the best routing hops toward the filtered-in neighborhood, you never get routed correctly. At layer 0, if the filtered set is sparse (say 0.1% of nodes), the local neighborhood around any filtered-in node will mostly contain filtered-out nodes. The beam search exhausts its candidates without finding enough filtered-in results.
+The standard approach is **product quantization (PQ)**: split each high-dimensional vector into sub-vectors, quantize each sub-vector independently to a small codebook (e.g., 256 centroids per sub-vector), and represent the full vector as a sequence of codebook indices. Dot products can then be computed with lookup tables — precompute the dot product between the query and each of the 256 codebook entries per sub-vector, then score each compressed vector by summing lookups.
 
-More precisely: the M nearest neighbors stored per node were chosen to represent the full corpus, not the filtered subgraph. The filtered subgraph is a random 0.1% sample of nodes; its local connectivity via existing edges is terrible. The HNSW graph was never built to efficiently navigate *within* that subgraph.
+PQ minimizes mean squared reconstruction error: it trains the quantizer to minimize `E[‖x − x̃‖²]` uniformly across all directions. This is a reasonable default, but it's the wrong objective for MIPS.
 
-## how HNSW can do pre-filtering algorithmically
+## anisotropic quantization: the key insight
 
-The insight that makes runtime filtering work: **traverse freely, but gate the result set**.
-
-Don't restrict which nodes go into the candidate queue `C`. Let the beam search expand into all neighbors as normal, so graph routing is preserved. But when deciding whether a node counts toward the `k` results you need, check `P(v)` first. Only filtered-in nodes go into `W`.
+The dot product between query `q` and database vector `x` is `⟨q, x⟩`. When you quantize `x` to `x̃`, you compute `⟨q, x̃⟩` instead. The error in the inner product estimate is:
 
 ```
-// Runtime-filtered beam search at layer 0
-C ← priority queue seeded with entry point
-W ← empty result set (max-heap, size ef)
-
-while C not empty:
-    c ← pop closest from C
-    if distance(c, q) > distance(W.worst, q) and |W| >= k:
-        break
-
-    for each neighbor n of c:
-        if n not visited:
-            mark n visited
-            d ← distance(n, q)
-            if d < distance(W.worst, q) or |W| < ef:
-                push n → C             // always explore
-                if P(n):               // only count in results
-                    push n → W
-
-return top-k from W
+⟨q, x̃⟩ − ⟨q, x⟩  =  ⟨q, x̃ − x⟩  =  ⟨q, e⟩
 ```
 
-This preserves connectivity. You still traverse filtered-out nodes as routing steps; you just don't count them. The cost: work proportional to the number of filtered-out nodes you visit. When selectivity is 0.1%, roughly 999 of every 1000 nodes visited are wasted traversal.
+where `e = x̃ − x` is the quantization error vector.
 
-**ACORN** fixes this at index construction time rather than query time. The observation: the two-hop neighborhood of any node is much larger than its direct neighborhood. If you could expand two hops during search, you'd have many more chances to land on a filtered-in node without getting stranded.
+Now decompose `e` relative to `x`:
 
-ACORN builds a denser version of HNSW: for each node `u`, it stores not just its M nearest neighbors, but also a set of *neighbor-of-neighbor* links — the closest vectors reachable in two hops from `u`, up to a budget `M_β`. This augmented neighbor list is stored at index time.
+```
+e  =  e_∥  +  e_⊥
 
-At query time, the beam search uses this denser graph. When considering node `u`, instead of just expanding to its direct neighbors, the search expands through the two-hop list, which has been pre-populated with candidates that are topologically further but geometrically diverse. The chance that at least some of those candidates pass `P(v)` is much higher than with a standard M-neighbor list.
+e_∥  =  (e · x̂) x̂      // component parallel to x
+e_⊥  =  e − e_∥          // component orthogonal to x
+```
 
-When a filter is extremely selective (less than ~1% of the corpus passes), even two-hop expansion can't maintain enough filtered-in candidates for good routing. At that threshold the right move is to give up on ANN entirely and do exact search over the pre-filtered candidate set. The crossover point — "when is brute force cheaper than ANN on the full index?" — depends on the filter size, dimensionality, and hardware, but it's usually in the range of a few hundred thousand vectors.
+The inner product error becomes `⟨q, e_∥⟩ + ⟨q, e_⊥⟩`.
 
-## how ScaNN is constructed
+Here is the asymmetry that ScaNN exploits: **MIPS cares only about the vectors that have high inner products with `q`**. Those are the vectors roughly aligned with `q`. For such a vector `x`, the query `q` is approximately parallel to `x`, so `q ≈ α x̂` for some scalar `α`. That means:
 
-ScaNN uses a fundamentally different structure: a two-level partitioned quantization index.
+```
+⟨q, e_∥⟩  ≈  α · ‖e_∥‖       // large: q is roughly in the x direction
+⟨q, e_⊥⟩  ≈  0               // small: q is roughly orthogonal to e_⊥
+```
 
-**Level 1 — partitioning.** Run k-means over the corpus to produce `k` cluster centroids, where `k ≈ √N` (for N vectors, that's typically a few thousand clusters). Each vector is assigned to its nearest centroid. This produces `k` posting lists, one per cluster.
+The parallel component of quantization error directly corrupts the inner product estimate for the vectors MIPS most cares about. The orthogonal component mostly cancels. Yet standard PQ weights both equally — it minimizes `‖e‖² = ‖e_∥‖² + ‖e_⊥‖²`.
 
-**Level 2 — quantization within each partition.** Within each cluster, encode every vector using *anisotropic vector quantization* (AVQ). Standard product quantization minimizes mean squared reconstruction error uniformly across all directions. AVQ does something more useful for similarity search: it penalizes quantization error in the direction parallel to the query vector more heavily than error in the perpendicular direction, because parallel-direction error degrades inner product estimates while perpendicular error mostly cancels out. The quantization codebooks are trained to minimize this weighted loss, not MSE.
+**Anisotropic vector quantization (AVQ)** replaces the MSE loss with a weighted loss that penalizes the parallel component more heavily:
 
-The result: compact quantized codes that produce more accurate inner product estimates for the vectors that actually matter (high-similarity candidates), at the cost of worse estimates for low-similarity ones. This is a good trade.
+```
+loss(e) = η · ‖e_∥‖²  +  ‖e_⊥‖²      where η > 1
+```
 
-**Search** runs in three phases:
+Training the quantizer under this loss produces codebooks where `x̃` tracks `x` more closely in the direction of `x` itself, at the cost of more residual error in perpendicular directions. That's the right trade for MIPS: you sacrifice accuracy on the inner product components that don't affect which vectors rank highest, and gain accuracy on the component that does.
 
-1. **Partition scoring.** Score all `k` cluster centroids against the query. Select the top `t` clusters to search (e.g., `t = 10%` of `k`). Vectors in the other 90% of clusters are never touched.
-2. **Quantized in-partition scoring.** For each of the `t` selected clusters, score every quantized vector against the query using AVQ inner product estimation. This is fast: it's table lookups over the pre-computed quantization codebook, not float multiply-accumulates over the full vector dimension.
-3. **Exact rescoring.** Take the top-c candidates from phase 2, compute exact distances, return top-k.
+Concretely: the anisotropic codebooks give better inner product estimates for the high-similarity candidates (the ones you're actually going to return), and slightly worse estimates for the low-similarity ones. You were never going to return the low-similarity ones anyway.
 
-## why pre-filtering is structurally different in ScaNN
+The parameter `anisotropic_quantization_threshold` in ScaNN controls `η` — how aggressively to weight the parallel component. Setting it to 0.2 is a common default; tuning it on your data distribution matters.
 
-ScaNN's phases are independent. There is no routing graph. Vectors in cluster A are scored; vectors in cluster B are scored; the two scoring passes are completely independent. Skipping a vector in cluster A has no effect on your ability to find vectors in cluster B.
+## rescoring
 
-This means the predicate `P(v)` can be applied at either level without breaking anything:
+The quantized scoring phase returns a ranked list of approximate top-candidates, not exact results. AVQ is better than PQ at ranking them correctly, but approximation errors still produce small ranking mistakes — a vector ranked 12th by approximation might actually belong in the top 5.
 
-**At partition level**: before phase 2, check whether a cluster contains any filtered-in vectors (this requires a per-cluster filter summary, e.g., a bitset or posting list). If a cluster has zero matching vectors, skip quantized scoring for that entire cluster. This saves work proportional to cluster size times filter selectivity.
+The rescoring phase takes the top-c candidates from the scoring phase (with `c > k`, typically a few hundred) and recomputes exact inner products for each. The final top-k are drawn from these exact scores.
 
-**At vector level**: during phase 2, before computing the quantized distance for a candidate, check `P(v)`. If it fails, skip the distance computation entirely. The per-vector overhead is a single predicate check; the savings scale with filter selectivity.
+This is cheap because `c ≪ N`. The expensive part was identifying the `c` candidates worth exact-scoring; rescoring `c` vectors in exact arithmetic is fast. The `reordering_num_neighbors` parameter controls `c`. Higher values improve recall at the cost of more exact dot products.
 
-Both can be applied together: prune empty clusters first, then gate individual vector scoring inside the surviving clusters.
+The accuracy-cost budget works like this: partitioning controls how many clusters you search (first filter), quantization controls how cheaply you score each candidate inside those clusters (second filter), and rescoring controls how accurately you rerank the survivors (final refinement).
 
-The key difference from HNSW: in ScaNN there are no "routing nodes." Every vector is just a thing to score. You can skip any of them without affecting your ability to find any other vector. Pre-filtering in ScaNN reduces the number of score operations without touching the structural invariant of the index. Pre-filtering in HNSW reduces the number of usable graph edges, which breaks the structural invariant of the index and requires either tolerating wasted traversal or rebuilding the graph to be denser.
+## SOAR: the boundary problem
 
-## the structural lesson
+Standard ScaNN assigns each database vector to exactly one cluster — its nearest centroid. This creates a boundary recall problem: a vector sitting near the boundary between two clusters might be the correct result for a query, but if the query's top-t clusters happen to include only one side of the boundary, that vector is never scored.
 
-The reason pre-filtering is hard in HNSW and comparatively straightforward in ScaNN is not a design choice — it's a consequence of what each index is fundamentally doing. HNSW is a routing structure: the graph edges exist to navigate you from anywhere in the space to the right neighborhood. Any node can be a routing hop, so removing nodes (via filtering) degrades navigation. ScaNN is a scoring structure: the partitioning and quantization exist to reduce the number of distance computations, but scoring is independent per vector. Filtering just reduces the work.
+This is especially harmful for vectors where the quantization residual (the difference between the vector and its assigned centroid) is large and **parallel** to likely query directions. When the residual is parallel to `q`, the centroid is a poor representative of `x` from the query's perspective — `⟨q, centroid⟩` underestimates `⟨q, x⟩`, so the cluster gets deprioritized and the vector gets missed.
 
-Both approaches reach the same practical answer at extreme selectivity: below a certain threshold, brute force on the filtered set is cheaper than using the ANN index at all. The difference is how much engineering you need between "the ANN index" and "brute force on the filtered set" to handle the middle of the selectivity range.
+**SOAR** (Spilling with Orthogonality-Amplified Residuals, NeurIPS 2023) fixes this by assigning each vector to a primary cluster *and* a secondary cluster, chosen so that its residual from the secondary centroid is near-orthogonal to typical query directions.
+
+The intuition: if the residual from a backup centroid is orthogonal to `q`, then `⟨q, x⟩ ≈ ⟨q, c_2⟩` — the backup centroid is a good proxy for `x` in the inner product sense, so queries similar to `x` will include the backup cluster in their top-t. The vector gets a second chance to be found.
+
+The "orthogonality-amplified" part of the name refers to how the secondary centroid is selected: not simply the second-nearest centroid, but the centroid whose residual direction has the smallest component parallel to `x`. This is a geometric condition on the backup assignment that maximizes query coverage.
+
+In practice, SOAR increases storage by roughly 2x (each vector appears in two posting lists), but the recall improvement at a fixed number of clusters searched is significant — you get better coverage of boundary vectors without searching more clusters.
+
+## pre-filtering
+
+One useful property of ScaNN's structure follows from partition independence.
+
+Filters in vector search narrow the candidate set: "find similar vectors, but only among vectors where `P(v)` is true." Post-filtering — run ANN, then apply the filter — loses recall when the filter is selective, because most of the top-k candidates get discarded.
+
+ScaNN supports pre-filtering at two levels:
+
+**Partition level**: at query time, before scoring any vectors, check whether each selected cluster contains any filtered-in vectors. If a cluster is entirely filtered out, skip it. This requires a small per-cluster filter summary (a bitset or a per-value posting list), but saves the entire quantized scoring pass for empty clusters.
+
+**Vector level**: during quantized scoring inside a cluster, check `P(v)` before computing the approximate inner product. Vectors that fail the filter are skipped. The per-vector overhead is a single predicate check.
+
+Neither operation breaks the index. ScaNN's phases are independent scoring passes over pre-selected candidates — there is no routing graph, no connectivity requirement, no assumption that all vectors are reachable. Skipping any subset of vectors only affects which candidates appear in the output; it doesn't affect the index's ability to find other candidates. This is structurally different from graph-based indexes, where skipping nodes during traversal can disconnect the routing path to good results. In ScaNN, each vector is just a thing to score, and not scoring it is free.
+
+## putting it together
+
+ScaNN at full scale runs:
+
+1. Score `k` cluster centroids against `q` → select top-`t` clusters.
+2. Score all quantized vectors in those `t` clusters against `q` using AVQ lookups → collect top-c approximate candidates.
+3. Exact-score the top-c candidates → return top-k.
+
+The parameters — `k`, `t`, `c` — are independently tunable. More clusters (higher `k`) means finer partitioning and better recall at fixed `t/k`; more clusters searched (higher `t`) means higher recall at higher latency; more rescoring candidates (higher `c`) means more accurate final ranking at the cost of more exact dot products.
+
+What makes ScaNN worth studying is that each phase embodies a precise answer to a precise question: *where* in the corpus should we look (partitioning), *how cheaply* can we score candidates there (AVQ), and *how accurately* do we finalize the ranking (rescoring). The anisotropic quantization is the part that departs furthest from convention — and it's the part that matters most, because the error it avoids is the error that MIPS gets wrong on standard PQ.
 
 — v
