@@ -2,134 +2,121 @@
 date: 2026-06-03
 tag: search
 title: "How ScaNN works"
-read: 11 min
-deck: "A walk through the three phases of ScaNN — partitioning, anisotropic quantization, and rescoring — and why each one exists."
+read: 8 min
+deck: "Google's vector search algorithm explained with analogies — partitioning, approximate scoring, and why compression isn't just compression."
 ---
 
-Most vector indexes are solving the same problem: given a query vector `q` and a corpus of `N` vectors, find the k vectors with the highest similarity to `q` without computing all N distances. The naive approach — score every vector, sort, return top-k — is exact but doesn't scale past a few hundred thousand vectors at low latency.
+You're building a music recommendation system. You have 100 million songs. A user plays one and you want to find the 10 most similar songs — instantly, every time.
 
-ScaNN (Scalable Nearest Neighbors) is Google's answer to this problem. It was open-sourced in 2020 and underpins several of Google's production retrieval systems. The reason it's worth understanding in detail is that it makes a non-obvious design choice at each phase, and understanding *why* those choices were made tells you something useful about the structure of the MIPS problem itself.
+The obvious approach: compare the query song to every other song, rank by similarity, return top 10. That's 100 million comparisons per request. At any real scale, that's too slow.
 
-MIPS stands for Maximum Inner Product Search — find vectors with the highest dot product with the query. Cosine similarity reduces to this when vectors are normalized, so MIPS covers most practical similarity search.
+ScaNN is Google's solution to this problem. It's the algorithm behind several of Google's production search and recommendation systems, open-sourced in 2020. It solves the speed problem in three phases, and each phase has a neat idea behind it.
 
-## the three phases
+## first: what is "similarity" here?
 
-ScaNN decomposes search into three sequential phases:
+Before the algorithm, a quick grounding. In vector search, each item (a song, a product, a document) is represented as a list of numbers — a *vector*. These numbers capture some learned sense of the item's meaning or character: similar items end up with similar vectors.
 
-1. **Partitioning** — reduce the candidate pool by only searching the most promising partitions of the corpus.
-2. **Scoring** — approximate inner products for all candidates in those partitions, quickly.
-3. **Rescoring** — rerank the top candidates with exact inner products.
+Similarity between two vectors is usually measured as a dot product: multiply each pair of corresponding numbers and add them up. A high result means the vectors are pointing in the same direction — the items are similar. This is called MIPS: Maximum Inner Product Search. ScaNN is built to do MIPS fast.
 
-Each phase is independently optional, but for large corpora (100k+ vectors) you want all three. The combination gives you the accuracy of exact search at a fraction of the cost.
+## phase 1: partitioning — stop searching everywhere
 
-## partitioning
+The first idea is simple: **don't look at everything**.
 
-The partitioning phase divides the corpus into `k` clusters using k-means. Each database vector `x` is assigned to the centroid it is closest to. At index time this is just training a k-means model. At query time the payoff comes: rather than scoring all N vectors, ScaNN scores all `k` centroids first, picks the top `t` clusters, and only runs the inner scoring phase on vectors inside those clusters.
+Think of a library with 100,000 books. If you want books similar to a mystery novel you enjoyed, you don't start at shelf A1 and check every book. You walk to the mystery section. You've already cut the search down to a few thousand books.
 
-If `k = √N`, then each cluster contains roughly `√N` vectors. Searching `t` clusters means scoring `t·√N` vectors instead of N. With `t = 0.1·k`, that's `0.1·√N·√N = 0.1N` — a 10x reduction in work before the expensive scoring phase even starts.
+ScaNN does the same thing. At index time, it runs k-means clustering on all the vectors and groups them into *k* clusters — neighborhoods of similar vectors. Each cluster has a centroid, which is the average point at the center of that group.
 
-The parameter `t` (`num_leaves_to_search` in the ScaNN API) is the primary recall-vs-speed dial. More clusters searched means higher recall and higher latency. Typical values search 1–10% of clusters.
+At query time:
 
-The rule of thumb `k ≈ √N` comes from minimizing the total work: `k` centroids to score in phase 1, `N/k` vectors per cluster to score in phase 2. Total work is roughly `k + N/k`, which is minimized at `k = √N`. At that point both terms equal `√N`, giving `O(√N)` total work versus `O(N)` for brute force.
+1. Score the query against all `k` centroids. This is cheap — just `k` comparisons.
+2. Pick the top `t` most similar centroids (the most promising neighborhoods).
+3. Only look at vectors inside those `t` clusters.
 
-## scoring: why standard quantization isn't enough
+With 10 million vectors and `k = 3,000` clusters (~√10M), each cluster holds about 3,000 vectors. If you search the top 100 clusters, you're scoring 300,000 vectors instead of 10 million — a 33x reduction before doing anything else.
 
-Inside each selected cluster, ScaNN needs to score every vector. A corpus of 10M vectors with 768 dimensions, stored as float32, is 30GB. Computing exact dot products for all vectors in the top-t clusters is expensive even after partitioning. The scoring phase compresses those vectors.
+The dial here is `t`: how many clusters to search. More clusters → better results → higher latency. In practice, searching 3–10% of clusters gives good recall for most datasets.
 
-The standard approach is **product quantization (PQ)**: split each high-dimensional vector into sub-vectors, quantize each sub-vector independently to a small codebook (e.g., 256 centroids per sub-vector), and represent the full vector as a sequence of codebook indices. Dot products can then be computed with lookup tables — precompute the dot product between the query and each of the 256 codebook entries per sub-vector, then score each compressed vector by summing lookups.
+## phase 2: approximate scoring — compress the vectors
 
-PQ minimizes mean squared reconstruction error: it trains the quantizer to minimize `E[‖x − x̃‖²]` uniformly across all directions. This is a reasonable default, but it's the wrong objective for MIPS.
+After partitioning you still have hundreds of thousands of vectors to score. Storing 10 million vectors at 768 dimensions in full precision is ~30GB. Doing exact dot products across that is expensive even after the partitioning step.
 
-## anisotropic quantization: the key insight
+So ScaNN compresses the vectors. The technique is called **quantization** — instead of storing each vector precisely, you store an approximation that's cheap to compute with.
 
-The dot product between query `q` and database vector `x` is `⟨q, x⟩`. When you quantize `x` to `x̃`, you compute `⟨q, x̃⟩` instead. The error in the inner product estimate is:
+Here's the analogy: think of your music taste as a point on a map. Storing your exact location takes many decimal places. Instead, you just say "I'm in neighborhood #42." You lose some precision, but you can compare neighborhoods cheaply.
+
+In quantization, ScaNN pre-computes a "codebook" of reference vectors during index building. Each database vector is then encoded as a sequence of references into that codebook — a short code instead of a full vector. At query time, ScaNN pre-computes how similar the query is to each codebook entry, then scores every compressed vector via fast table lookups instead of full dot products.
+
+This is dramatically faster. You're looking up pre-computed numbers in a small table, not doing hundreds of floating-point multiplications per vector.
+
+## the clever part: compression that cares about what matters
+
+Standard compression minimizes error uniformly — it tries to reconstruct each vector as accurately as possible in all directions, equally. That sounds right. But for similarity search, it's the wrong goal.
+
+Here's why. You only care about getting the *ranking* right for the vectors with the *highest* similarity to your query. The vector at rank 47,000 can have a completely wrong approximate score and it doesn't matter — you were never going to return it.
+
+And here's the key geometry: vectors with high similarity to your query tend to be *pointing in the same direction* as your query. If you think of the query as an arrow, the relevant results are other arrows roughly aligned with it.
+
+When you compress a vector and introduce a small error, that error can be decomposed into two parts:
+- **parallel error** — error in the direction the vector is pointing
+- **perpendicular error** — error in the sideways directions
+
+For two arrows pointing roughly the same way, the parallel error is what throws off the dot product between them. Perpendicular error mostly cancels out when you compute the dot product.
+
+Standard quantization treats both error types equally. **Anisotropic vector quantization (AVQ)** — ScaNN's approach — penalizes parallel error more heavily during training. The result: the compressed vectors are more accurate in the direction that matters for ranking, at the cost of being slightly less accurate sideways.
+
+A concrete analogy: imagine rating restaurants by how much you'd enjoy them. You care a lot about cuisine type (Italian vs. Thai) and not much about how many plants are in the decor. Good compression for *you specifically* would preserve cuisine type precisely and be approximate on the plants. ScaNN does the same — it figures out which "directions" matter for inner product search and compresses to be accurate there.
+
+The practical effect: at the same compression ratio, AVQ produces better ranking of the top results than standard quantization does. You're not paying more — you're spending the same compression budget more wisely.
+
+## phase 3: rescoring — clean up the ranking
+
+Approximate scoring gives you a rough ranked list. It's good but not perfect — the item that should be rank 2 might have slipped to rank 8 due to compression error.
+
+The fix is cheap: take the top-c candidates from phase 2 (say, the top 200), and compute their exact similarity scores. No compression, no shortcuts — just the real dot product. Rerank those 200 and return the final top 10.
+
+This works because `c` is tiny compared to `N`. You did the hard work narrowing from 10 million to 200. Re-scoring 200 vectors exactly is fast. The cost is proportional to `c`, not `N`.
+
+The full pipeline then looks like:
 
 ```
-⟨q, x̃⟩ − ⟨q, x⟩  =  ⟨q, x̃ − x⟩  =  ⟨q, e⟩
+10,000,000 vectors
+   → partition: score 3,000 centroids → pick top 100 clusters
+   → approximate score: ~300,000 vectors via fast table lookups → top 200
+   → exact rescore: 200 vectors → top 10 returned
 ```
 
-where `e = x̃ − x` is the quantization error vector.
+Each step is much faster than the one before, and the final answer is nearly as accurate as searching everything exactly.
 
-Now decompose `e` relative to `x`:
+## SOAR: the problem at the borders
 
-```
-e  =  e_∥  +  e_⊥
+There's a subtle issue with single-cluster assignment. A vector sitting near the boundary between two clusters might belong to cluster A, but some queries that would love that vector happen to search only cluster B.
 
-e_∥  =  (e · x̂) x̂      // component parallel to x
-e_⊥  =  e − e_∥          // component orthogonal to x
-```
+It's like a book about "spy thrillers" that could reasonably sit in either the Mystery section or the Thriller section. If the librarian files it in Mystery but a reader browsing Thrillers would have loved it, they never find it.
 
-The inner product error becomes `⟨q, e_∥⟩ + ⟨q, e_⊥⟩`.
+SOAR (Google, NeurIPS 2023) fixes this by assigning borderline vectors to **two** clusters instead of one. The primary cluster is the nearest centroid as normal. The secondary cluster is chosen with a specific rule: pick the backup cluster such that its centroid is a good proxy for this vector *from the perspective of likely queries*.
 
-Here is the asymmetry that ScaNN exploits: **MIPS cares only about the vectors that have high inner products with `q`**. Those are the vectors roughly aligned with `q`. For such a vector `x`, the query `q` is approximately parallel to `x`, so `q ≈ α x̂` for some scalar `α`. That means:
+The math behind choosing the secondary cluster is what gives SOAR its name (Spilling with Orthogonality-Amplified Residuals), but the intuition is: find a backup neighborhood where queries that would want this item are likely to look. The vector gets a second chance to be found without you having to search more clusters.
 
-```
-⟨q, e_∥⟩  ≈  α · ‖e_∥‖       // large: q is roughly in the x direction
-⟨q, e_⊥⟩  ≈  0               // small: q is roughly orthogonal to e_⊥
-```
+The cost: each borderline vector appears in two posting lists, so storage increases by up to 2x. The benefit: meaningfully better recall at the same search latency.
 
-The parallel component of quantization error directly corrupts the inner product estimate for the vectors MIPS most cares about. The orthogonal component mostly cancels. Yet standard PQ weights both equally — it minimizes `‖e‖² = ‖e_∥‖² + ‖e_⊥‖²`.
+## pre-filtering: searching a subset
 
-**Anisotropic vector quantization (AVQ)** replaces the MSE loss with a weighted loss that penalizes the parallel component more heavily:
+One last thing ScaNN handles cleanly: filters. "Find similar songs — but only from artists I follow."
 
-```
-loss(e) = η · ‖e_∥‖²  +  ‖e_⊥‖²      where η > 1
-```
+The naive approach (post-filtering) finds the 10 most similar songs from 100M, then checks if you follow the artist. If you follow 1% of artists, 9 of those 10 results get discarded. You return 1 song instead of 10.
 
-Training the quantizer under this loss produces codebooks where `x̃` tracks `x` more closely in the direction of `x` itself, at the cost of more residual error in perpendicular directions. That's the right trade for MIPS: you sacrifice accuracy on the inner product components that don't affect which vectors rank highest, and gain accuracy on the component that does.
+ScaNN can apply the filter *during* scoring instead of after. At the cluster level, it skips entire clusters that contain no songs from artists you follow. At the vector level, it skips individual vectors that don't match the filter before computing any approximate score.
 
-Concretely: the anisotropic codebooks give better inner product estimates for the high-similarity candidates (the ones you're actually going to return), and slightly worse estimates for the low-similarity ones. You were never going to return the low-similarity ones anyway.
+This works because ScaNN's phases are independent scoring steps — there's no graph to navigate, no requirement that all vectors be reachable. You can freely skip any vector and the remaining ones are still found correctly. Filtering just reduces work; it doesn't break anything structural in the index.
 
-The parameter `anisotropic_quantization_threshold` in ScaNN controls `η` — how aggressively to weight the parallel component. Setting it to 0.2 is a common default; tuning it on your data distribution matters.
+## the shape of the algorithm
 
-## rescoring
+Each phase of ScaNN answers one question:
 
-The quantized scoring phase returns a ranked list of approximate top-candidates, not exact results. AVQ is better than PQ at ranking them correctly, but approximation errors still produce small ranking mistakes — a vector ranked 12th by approximation might actually belong in the top 5.
+- **Partitioning** — *where* in the space should we look?
+- **Approximate scoring (AVQ)** — *how cheaply* can we score vectors there?
+- **Rescoring** — *how accurately* do we finalize the ranking?
 
-The rescoring phase takes the top-c candidates from the scoring phase (with `c > k`, typically a few hundred) and recomputes exact inner products for each. The final top-k are drawn from these exact scores.
-
-This is cheap because `c ≪ N`. The expensive part was identifying the `c` candidates worth exact-scoring; rescoring `c` vectors in exact arithmetic is fast. The `reordering_num_neighbors` parameter controls `c`. Higher values improve recall at the cost of more exact dot products.
-
-The accuracy-cost budget works like this: partitioning controls how many clusters you search (first filter), quantization controls how cheaply you score each candidate inside those clusters (second filter), and rescoring controls how accurately you rerank the survivors (final refinement).
-
-## SOAR: the boundary problem
-
-Standard ScaNN assigns each database vector to exactly one cluster — its nearest centroid. This creates a boundary recall problem: a vector sitting near the boundary between two clusters might be the correct result for a query, but if the query's top-t clusters happen to include only one side of the boundary, that vector is never scored.
-
-This is especially harmful for vectors where the quantization residual (the difference between the vector and its assigned centroid) is large and **parallel** to likely query directions. When the residual is parallel to `q`, the centroid is a poor representative of `x` from the query's perspective — `⟨q, centroid⟩` underestimates `⟨q, x⟩`, so the cluster gets deprioritized and the vector gets missed.
-
-**SOAR** (Spilling with Orthogonality-Amplified Residuals, NeurIPS 2023) fixes this by assigning each vector to a primary cluster *and* a secondary cluster, chosen so that its residual from the secondary centroid is near-orthogonal to typical query directions.
-
-The intuition: if the residual from a backup centroid is orthogonal to `q`, then `⟨q, x⟩ ≈ ⟨q, c_2⟩` — the backup centroid is a good proxy for `x` in the inner product sense, so queries similar to `x` will include the backup cluster in their top-t. The vector gets a second chance to be found.
-
-The "orthogonality-amplified" part of the name refers to how the secondary centroid is selected: not simply the second-nearest centroid, but the centroid whose residual direction has the smallest component parallel to `x`. This is a geometric condition on the backup assignment that maximizes query coverage.
-
-In practice, SOAR increases storage by roughly 2x (each vector appears in two posting lists), but the recall improvement at a fixed number of clusters searched is significant — you get better coverage of boundary vectors without searching more clusters.
-
-## pre-filtering
-
-One useful property of ScaNN's structure follows from partition independence.
-
-Filters in vector search narrow the candidate set: "find similar vectors, but only among vectors where `P(v)` is true." Post-filtering — run ANN, then apply the filter — loses recall when the filter is selective, because most of the top-k candidates get discarded.
-
-ScaNN supports pre-filtering at two levels:
-
-**Partition level**: at query time, before scoring any vectors, check whether each selected cluster contains any filtered-in vectors. If a cluster is entirely filtered out, skip it. This requires a small per-cluster filter summary (a bitset or a per-value posting list), but saves the entire quantized scoring pass for empty clusters.
-
-**Vector level**: during quantized scoring inside a cluster, check `P(v)` before computing the approximate inner product. Vectors that fail the filter are skipped. The per-vector overhead is a single predicate check.
-
-Neither operation breaks the index. ScaNN's phases are independent scoring passes over pre-selected candidates — there is no routing graph, no connectivity requirement, no assumption that all vectors are reachable. Skipping any subset of vectors only affects which candidates appear in the output; it doesn't affect the index's ability to find other candidates. This is structurally different from graph-based indexes, where skipping nodes during traversal can disconnect the routing path to good results. In ScaNN, each vector is just a thing to score, and not scoring it is free.
-
-## putting it together
-
-ScaNN at full scale runs:
-
-1. Score `k` cluster centroids against `q` → select top-`t` clusters.
-2. Score all quantized vectors in those `t` clusters against `q` using AVQ lookups → collect top-c approximate candidates.
-3. Exact-score the top-c candidates → return top-k.
-
-The parameters — `k`, `t`, `c` — are independently tunable. More clusters (higher `k`) means finer partitioning and better recall at fixed `t/k`; more clusters searched (higher `t`) means higher recall at higher latency; more rescoring candidates (higher `c`) means more accurate final ranking at the cost of more exact dot products.
-
-What makes ScaNN worth studying is that each phase embodies a precise answer to a precise question: *where* in the corpus should we look (partitioning), *how cheaply* can we score candidates there (AVQ), and *how accurately* do we finalize the ranking (rescoring). The anisotropic quantization is the part that departs furthest from convention — and it's the part that matters most, because the error it avoids is the error that MIPS gets wrong on standard PQ.
+The interesting part is the compression. Anisotropic quantization isn't just an implementation detail — it reflects a real insight about what makes MIPS different from generic vector compression. The error that matters is the error in the direction the query is pointing. Spend your compression budget there.
 
 — v
