@@ -329,6 +329,21 @@ a:hover {
   margin: 0 0 18px;
 }
 .post-body pre code { background: transparent; border: 0; padding: 0; }
+.post-body img {
+  display: block;
+  max-width: 100%;
+  height: auto;
+  border-radius: 6px;
+  margin: 0 auto 24px;
+}
+.post-body img + em {
+  display: block;
+  text-align: center;
+  font-size: 12px;
+  color: var(--ink-faint);
+  margin-top: -18px;
+  margin-bottom: 24px;
+}
 .post-body blockquote {
   margin: 0 0 18px;
   padding: 4px 0 4px 16px;
