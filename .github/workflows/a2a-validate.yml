@@ -1,0 +1,103 @@
+name: A2A Agent Validation
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'a2a-validator/**'
+  pull_request:
+    paths:
+      - 'a2a-validator/**'
+  schedule:
+    # Run every 6 hours as a liveness monitor against a deployed agent
+    - cron: '0 */6 * * *'
+  workflow_dispatch:
+    inputs:
+      agent_url:
+        description: 'A2A agent base URL to validate'
+        required: true
+        default: 'http://localhost:8080'
+      skip_round_trip:
+        description: 'Skip round-trip test (true/false)'
+        required: false
+        default: 'false'
+      skip_conformance:
+        description: 'Skip conformance tests (true/false)'
+        required: false
+        default: 'false'
+
+env:
+  # Fallback order: manual input → repository variable → placeholder
+  AGENT_URL: ${{ github.event.inputs.agent_url || vars.A2A_AGENT_URL || 'http://localhost:8080' }}
+
+jobs:
+  build:
+    name: Build Validator JAR
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          java-version: '21'
+          distribution: 'temurin'
+
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.10'
+
+      - name: Build fat JAR
+        working-directory: a2a-validator
+        run: gradle shadowJar
+
+      - name: Upload validator artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: a2a-validator-jar
+          path: a2a-validator/build/libs/a2a-validator-all.jar
+          retention-days: 1
+
+  validate:
+    name: Validate A2A Agent
+    runs-on: ubuntu-latest
+    needs: build
+    steps:
+      - uses: actions/setup-java@v4
+        with:
+          java-version: '21'
+          distribution: 'temurin'
+
+      - name: Download validator JAR
+        uses: actions/download-artifact@v4
+        with:
+          name: a2a-validator-jar
+          path: ./
+
+      - name: Run full A2A validation
+        run: |
+          ARGS="--output github --junit-output a2a-results.xml"
+
+          if [ "${{ github.event.inputs.skip_round_trip }}" = "true" ]; then
+            ARGS="$ARGS --skip-round-trip"
+          fi
+
+          if [ "${{ github.event.inputs.skip_conformance }}" = "true" ]; then
+            ARGS="$ARGS --skip-conformance"
+          fi
+
+          java -jar a2a-validator-all.jar validate $ARGS "${{ env.AGENT_URL }}"
+
+      - name: Upload validation results
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: a2a-validation-results
+          path: a2a-results.xml
+
+      - name: Publish test results
+        uses: EnricoMi/publish-unit-test-result-action@v2
+        if: always()
+        with:
+          files: a2a-results.xml
+          check_name: A2A Protocol Validation
+          comment_mode: off
