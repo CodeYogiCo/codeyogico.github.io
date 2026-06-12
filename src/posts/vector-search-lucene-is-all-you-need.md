@@ -2,7 +2,7 @@
 date: 2026-06-12
 tag: search
 title: "Vector search: Lucene is all you need"
-read: 8 min
+read: 9 min
 deck: "FAISS won't filter. Your segments already belong in object storage. The database you've been reaching around is the one you already have."
 hidden: true
 ---
@@ -19,7 +19,30 @@ The most practical problem: **FAISS has no native support for filtered search**.
 
 In almost every real retrieval problem, you're not searching over everything. You're searching over products in a category, documents from a specific tenant, items in a date range. You have a predicate, and you need nearest neighbors *within* that predicate. FAISS doesn't know what a predicate is. The common workaround — post-filtering — is statistically broken at anything other than trivial selectivity.
 
-The logic is simple. If your filter selects 1% of the corpus and you need 10 results, you have to overfetch by 100× to have a reasonable chance of getting 10 survivors after the filter. At 0.1% selectivity, oversampling falls apart entirely. You either return too few results or you're doing brute-force search with extra steps.
+The logic is simple. If your filter selects 1% of the corpus and you need 10 results, you have to overfetch by 100× to have a reasonable chance of getting 10 survivors after the filter. At 0.1% selectivity, oversampling falls apart entirely.
+
+Here's what that looks like in code:
+
+```python
+import faiss
+import numpy as np
+
+index = faiss.IndexHNSWFlat(768, 32)
+index.add(corpus_vectors)  # 1M products
+
+# post-filter: fetch 1000, keep the ones in category
+distances, ids = index.search(query_vec, k=1000)
+
+results = [
+    products[i] for i in ids[0]
+    if products[i]["category"] == "running-shoes"
+][:10]
+
+# if category is 1% of corpus, ~10 of 1000 survive — barely
+# if category is 0.1%, you likely return fewer than 10
+```
+
+You either return too few results or you're doing brute-force search with extra steps. There's no good path here. FAISS will never see the predicate, so it can't help you.
 
 The right answer is *pre-filtering*: evaluate the predicate during graph traversal, before committing to a candidate. That requires the index to understand your filter semantics. FAISS doesn't. Lucene does.
 
@@ -29,9 +52,45 @@ Lucene added HNSW-based vector search in version 9.0 (2022) and has been improvi
 
 When you run a filtered vector query in Lucene, it doesn't overfetch and discard. It maintains a *live docs* bitset — a compact representation of which document IDs are active after filter evaluation — and passes it into the HNSW traversal. Candidates that don't pass the filter are simply skipped during graph traversal. The search is over the filtered set from the start.
 
-This matters most at the tails of selectivity distributions, which is exactly where production queries tend to live. A user searching within a narrow category, a multi-tenant system isolating by customer ID, a time-bounded query over recent content — these are not edge cases. They're the common case.
+In Elasticsearch, this is just a query:
 
-There's also hybrid scoring: Lucene's `KnnFloatVectorQuery` composes naturally with BM25, boosting, function queries, and the full machinery you're probably already using for keyword search. You don't add a second system. You add a second query clause.
+```json
+POST /products/_search
+{
+  "knn": {
+    "field": "embedding",
+    "query_vector": [0.12, 0.45, ...],
+    "k": 10,
+    "num_candidates": 100,
+    "filter": {
+      "term": { "category": "running-shoes" }
+    }
+  }
+}
+```
+
+The `filter` isn't applied after the fact. It's passed into the HNSW graph walk as the live docs bitset. Nodes that fail the filter are invisible to the traversal — not fetched, not scored, not discarded. This works correctly at 0.1% selectivity the same way it works at 50%.
+
+There's also hybrid scoring. `knn` composes with `query` in the same request:
+
+```json
+{
+  "knn": {
+    "field": "embedding",
+    "query_vector": [...],
+    "k": 10,
+    "num_candidates": 100,
+    "boost": 0.7
+  },
+  "query": {
+    "match": {
+      "title": { "query": "red running shoes", "boost": 0.3 }
+    }
+  }
+}
+```
+
+BM25 and HNSW in one round-trip. No second system, no fan-out, no result merging layer you own.
 
 ## segments go in object storage
 
@@ -39,19 +98,65 @@ The other underrated fact about Lucene is its segment model, and what that model
 
 A Lucene index is not a single mutable file. It's a collection of **segments** — each segment is a complete, immutable, write-once mini-index. When you index new documents, Lucene writes a new segment. Periodically it merges small segments into larger ones. It never modifies a segment in place.
 
-Immutability is interesting for one specific reason: it makes segments trivially cacheable and trivially storable in object storage.
+```
+index/
+  _0.cfe   # segment 0 metadata
+  _0.cfs   # segment 0 data (docs, terms, vectors)
+  _1.cfe
+  _1.cfs
+  _2.cfe
+  _2.cfs
+  segments_4   # commit point — which segments are live
+```
 
-Object storage (S3, GCS, Azure Blob) doesn't like random writes. It's optimized for put-once, read-many access. Mutable database files are awkward here — you either pay for costly copy-on-write mechanics or you give up durability guarantees. Lucene's segment model fits the object storage access pattern almost perfectly. Write a segment once, upload it, read it many times from cold storage.
+When a merge runs, `_0` and `_1` become `_3`. The old files are deleted only after the new segment is flushed and fsync'd. At no point is any existing file overwritten.
 
-Elasticsearch's Searchable Snapshots feature exploits exactly this. Segments are stored in S3. The search node streams the parts it needs on demand, caches hot regions on local SSD, and cold data costs object storage prices rather than disk prices. For workloads with power-law access patterns — which is most of them — this is a meaningful cost lever.
+Immutability means: **write a segment once, put it in S3, read it many times**. Object storage doesn't like random writes — it's optimized for put-once, read-many. Lucene's segment model fits that access pattern almost perfectly.
 
-For vector indices specifically, HNSW graphs are large. A graph over 10 million 768-dimensional float32 vectors is roughly 30GB before any compression. Keeping that entirely in RAM is expensive. The segment model lets you tier it: hot segments on local NVMe, warm segments on object storage, full graph available, cache filling on demand.
+Elasticsearch's Searchable Snapshots exploits exactly this. You configure a snapshot repository pointing at S3:
 
-A standalone vector database doesn't give you this for free. You build it yourself, or you pay for managed infrastructure that has already reinvented the wheel.
+```json
+PUT /_snapshot/my-s3-repo
+{
+  "type": "s3",
+  "settings": {
+    "bucket": "my-search-snapshots",
+    "region": "us-east-1"
+  }
+}
+```
+
+Then mount old indices directly from the snapshot, without restoring them to local disk:
+
+```json
+POST /_snapshot/my-s3-repo/my-snapshot/_mount
+{
+  "index": "products-2024-01",
+  "renamed_index": "products-2024-01-cold"
+}
+```
+
+The search node streams segment data on demand and caches hot regions on local SSD. Cold data costs S3 prices (~$0.023/GB/month) instead of EBS prices (~$0.10/GB/month). For a 30GB HNSW graph over 10M vectors, that's real money at scale.
+
+A standalone vector database doesn't give you this for free. You build it yourself, or you pay for managed infrastructure that has already reinvented it.
 
 ## the operational argument
 
-New infrastructure has a cost that doesn't show up in benchmarks: operational surface area. A separate vector store means separate monitoring, separate incident response, separate backup and recovery, separate access control. It means two systems can disagree about the state of your data. It means a class of bugs that are fundamentally distributed systems bugs: dual-write failures, replication lag, the index getting out of sync with the source of truth.
+New infrastructure has a cost that doesn't show up in benchmarks: operational surface area. A separate vector store means separate monitoring, separate incident response, separate backup and recovery, separate access control. It means two systems can disagree about the state of your data — and the failure mode is silent.
+
+```
+# the dual-write problem, simplified
+
+def index_product(product):
+    es.index(index="products", body=product)      # line A
+    vector_db.upsert(product["id"], embedding)    # line B
+
+# line A succeeds, line B times out
+# now keyword search finds the product, vector search doesn't
+# no error surfaced to the caller
+```
+
+With Lucene-based vector search, the embedding and the document are the same write, in the same index, in the same transaction. There's no line B.
 
 Lucene-based systems — Elasticsearch, OpenSearch, Solr — are mature enough that most of these problems are already solved, documented, and understood by your ops team. The failure modes are known. The monitoring is off the shelf.
 
@@ -69,4 +174,4 @@ For everyone else: the filtering is already there. The segments already fit in o
 
 You don't need a new database. You need to look harder at the one you have.
 
-— v
+— Ali
