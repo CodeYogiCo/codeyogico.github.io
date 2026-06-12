@@ -1,10 +1,9 @@
 ---
 date: 2026-06-12
 tag: search
-title: "Vector search: Lucene is all you need"
+title: "You already have a vector database"
 read: 8 min
-deck: "HNSW is already in there. Your segments already belong in object storage. The database you've been reaching around is the one you already have."
-hidden: true
+deck: "HNSW is in Lucene. Your segments belong in object storage. The database you've been reaching around is the one you already have."
 ---
 
 I've added a vector database to a system that didn't need one. I've written the RFC, run the evaluation, argued for the dependency, and watched it sit beside our existing search stack for six months before anyone quietly asked why we had two systems doing half a job each.
