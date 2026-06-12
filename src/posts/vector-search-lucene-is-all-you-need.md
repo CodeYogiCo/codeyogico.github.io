@@ -29,11 +29,8 @@ Lucene's HNSW traversal accepts a live docs bitset built from the filter. Nodes 
 
 ```java
 // index time: define a vector field alongside regular fields
-FieldType vectorType = new FieldType();
-vectorType.setVectorDimensionsAndEncoding(768, VectorEncoding.FLOAT32);
-vectorType.setVectorSimilarityFunction(VectorSimilarityFunction.DOT_PRODUCT);
-
-document.add(new KnnFloatVectorField("embedding", floatVector, vectorType));
+document.add(new KnnFloatVectorField("embedding", floatVector,
+    VectorSimilarityFunction.DOT_PRODUCT));
 document.add(new StringField("category", "running-shoes", Field.Store.YES));
 writer.addDocument(document);
 ```
@@ -57,9 +54,11 @@ The filter is not applied after the fact. It is handed to the graph traversal. T
 You can also combine with BM25 in a single pass:
 
 ```java
+Query textQuery = new QueryParser("title", analyzer).parse("red running shoes");
+
 BooleanQuery hybrid = new BooleanQuery.Builder()
     .add(vectorQuery, BooleanClause.Occur.SHOULD)
-    .add(new MatchQuery("title", "red running shoes"), BooleanClause.Occur.SHOULD)
+    .add(textQuery, BooleanClause.Occur.SHOULD)
     .build();
 
 TopDocs results = searcher.search(hybrid, 10);
@@ -90,11 +89,14 @@ Write a segment once. Upload it. Read it many times from cold storage. Stream on
 A 30GB HNSW graph over 10 million 768-dimensional vectors sitting in S3 costs a fraction of what it costs on attached disk. And because segments are immutable, you never need to reconcile a partial write or coordinate a lock. The segment either exists or it doesn't.
 
 ```java
-// Lucene's Directory abstraction already supports this
-// S3Directory, GCSDirectory — drop-in replacements for FSDirectory
-Directory dir = S3Directory.open("my-bucket", "index-path");
+// Lucene's Directory abstraction is the seam
+// FSDirectory for local disk — swap in any implementation
+Directory dir = FSDirectory.open(Path.of("/var/index"));
 IndexWriterConfig config = new IndexWriterConfig(analyzer);
 IndexWriter writer = new IndexWriter(dir, config);
+
+// community implementations exist for S3, GCS, Azure Blob
+// segments are write-once, so any put-once store works
 ```
 
 A standalone vector database doesn't give you this. You build the tiering yourself, or you pay for managed infrastructure that already reinvented it.
