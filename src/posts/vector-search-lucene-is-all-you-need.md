@@ -2,120 +2,100 @@
 date: 2026-06-12
 tag: search
 title: "Vector search: Lucene is all you need"
-read: 9 min
-deck: "FAISS won't filter. Your segments already belong in object storage. The database you've been reaching around is the one you already have."
+read: 8 min
+deck: "HNSW is already in there. Your segments already belong in object storage. The database you've been reaching around is the one you already have."
 hidden: true
 ---
 
-I've added a vector database to a system that didn't need one. I've written the RFC, run the evaluation, argued for the dependency, and watched it sit beside Elasticsearch for six months before anyone quietly asked why we had two systems doing half a job each.
+I've added a vector database to a system that didn't need one. I've written the RFC, run the evaluation, argued for the dependency, and watched it sit beside our existing search stack for six months before anyone quietly asked why we had two systems doing half a job each.
 
 The answer was that we didn't understand what Lucene was already doing.
 
-## FAISS is a library
+## the library you already have
 
-FAISS is fast. It's from Meta. It has good benchmarks. It is also not a search system — it's an indexing library, and that gap matters in production more than any benchmark will show you.
+Lucene has had HNSW-based vector search since version 9.0. It shipped quietly. Most teams missed it. They were already reaching for something newer-looking.
 
-The problem is filtering. In almost every real retrieval problem, you're not searching over everything. You're searching over products in a category, documents from a tenant, content within a date range. You have a predicate, and you need nearest neighbors *within* it.
+The implementation is mature — running at scale inside search infrastructure across the industry. And because it lives inside Lucene, it composes naturally with everything else the index already knows: term filters, range queries, scoring, the full query model. You don't bolt a new system on. You add a field and write a query.
 
-FAISS doesn't know what a predicate is. So you post-filter: fetch more than you need, discard the ones that don't match.
+Filtering is where this matters most. In almost every real retrieval problem, you're not searching over everything. You're searching over products in a category, documents from a tenant, content within a date range. You have a predicate, and you need nearest neighbors *within* it.
 
-```python
-index = faiss.IndexHNSWFlat(768, 32)
-index.add(corpus_vectors)
-
-# ask for 1000, hope enough survive the filter
-distances, ids = index.search(query_vec, k=1000)
-results = [products[i] for i in ids[0]
-           if products[i]["category"] == "running-shoes"][:10]
-```
-
-At 1% category selectivity, about 10 of those 1000 survive. At 0.1%, you get fewer results than the user asked for and there's nothing you can do about it. You're either over-fetching into brute force territory or returning bad results. There's no good path.
+The naive approach — fetch more candidates than you need, discard the ones that fail the filter — breaks at anything other than trivial selectivity. At 1% category selectivity you're already over-fetching by 100×. At 0.1% the math falls apart entirely.
 
 > Post-filtering isn't a solution. It's a bet that the distribution cooperates.
 
-The right answer is pre-filtering: skip non-matching nodes *during* graph traversal, before you commit to a candidate. That requires the index to understand the predicate. FAISS never will. Lucene does this natively.
+Lucene's HNSW traversal accepts a live docs bitset built from the filter. Nodes that don't pass are invisible to the walk — not fetched, not scored, not discarded. The search is over the filtered set from the start. This works correctly at 0.1% selectivity the same way it works at 50%.
 
-## what Lucene actually does
+## what the code looks like
 
-Lucene has had HNSW-based vector search since version 9.0. The implementation is quiet, mature, and already running at scale inside every Elasticsearch and OpenSearch cluster in the world. It's also integrated with Lucene's query model — which means filtering is not an afterthought.
+```java
+// index time: define a vector field alongside regular fields
+FieldType vectorType = new FieldType();
+vectorType.setVectorDimensionsAndEncoding(768, VectorEncoding.FLOAT32);
+vectorType.setVectorSimilarityFunction(VectorSimilarityFunction.DOT_PRODUCT);
 
-When you run a filtered vector query, Lucene builds a *live docs* bitset from the filter predicate and hands it to the HNSW traversal. Nodes that don't pass are invisible to the walk. Not fetched, not scored, not discarded — invisible.
-
-```json
-POST /products/_search
-{
-  "knn": {
-    "field": "embedding",
-    "query_vector": [0.12, 0.45, ...],
-    "k": 10,
-    "num_candidates": 100,
-    "filter": {
-      "term": { "category": "running-shoes" }
-    }
-  }
-}
+document.add(new KnnFloatVectorField("embedding", floatVector, vectorType));
+document.add(new StringField("category", "running-shoes", Field.Store.YES));
+writer.addDocument(document);
 ```
 
-This works correctly at 0.1% selectivity the same way it works at 50%. The math doesn't break.
+```java
+// query time: HNSW search with an inline filter
+Query categoryFilter = new TermQuery(new Term("category", "running-shoes"));
 
-And because it's Lucene, it composes. BM25 and HNSW in the same request, one round-trip, no fan-out layer you own:
+KnnFloatVectorQuery vectorQuery = new KnnFloatVectorQuery(
+    "embedding",
+    queryVector,
+    10,          // k
+    categoryFilter
+);
 
-```json
-{
-  "knn": {
-    "field": "embedding",
-    "query_vector": [...],
-    "k": 10,
-    "num_candidates": 100,
-    "boost": 0.7
-  },
-  "query": {
-    "match": { "title": { "query": "red running shoes", "boost": 0.3 } }
-  }
-}
+TopDocs results = searcher.search(vectorQuery, 10);
 ```
 
-You don't add a second system. You add a second query clause.
+The filter is not applied after the fact. It is handed to the graph traversal. The HNSW walk never touches a node that fails it.
+
+You can also combine with BM25 in a single pass:
+
+```java
+BooleanQuery hybrid = new BooleanQuery.Builder()
+    .add(vectorQuery, BooleanClause.Occur.SHOULD)
+    .add(new MatchQuery("title", "red running shoes"), BooleanClause.Occur.SHOULD)
+    .build();
+
+TopDocs results = searcher.search(hybrid, 10);
+```
+
+Two signals, one round-trip, no merging layer you own.
 
 ## segments belong in object storage
 
-The other thing worth understanding about Lucene is its segment model — because it has a direct implication for what you pay to store vectors.
+The other thing worth understanding about Lucene is its segment model — and what it implies for what you pay to store a large HNSW graph.
 
-A Lucene index is not one mutable file. It's a collection of segments, each one complete, immutable, write-once.
+A Lucene index is not one mutable file. It is a collection of segments, each one complete, immutable, write-once.
 
 ```
 index/
-  _0.cfs   # segment 0 — docs, terms, vectors
-  _1.cfs   # segment 1
-  _2.cfs   # segment 2
+  _0.cfs      # segment 0 — docs, terms, vectors, HNSW graph
+  _1.cfs      # segment 1
+  _2.cfs      # segment 2
   segments_4  # commit point — which segments are live
 ```
 
-New documents create new segments. Merges combine small segments into large ones. Nothing is ever overwritten. The files that exist are final.
+New documents create new segments. Merges combine small segments into larger ones. Nothing is ever overwritten. The files that exist are final.
 
-That makes them trivially portable. Object storage hates random writes — it's designed for put-once, read-many. Mutable database files fight that access pattern constantly. Lucene segments fit it perfectly.
+That makes them trivially portable. Object storage — S3, GCS, Azure Blob — is designed for put-once, read-many. Mutable database files fight that access pattern. Lucene segments fit it natively.
 
-Elasticsearch's Searchable Snapshots exploits exactly this. You point a snapshot repo at S3:
+Write a segment once. Upload it. Read it many times from cold storage. Stream only the parts you need on a given query, cache hot graph regions on local SSD.
 
-```json
-PUT /_snapshot/my-s3-repo
-{
-  "type": "s3",
-  "settings": { "bucket": "my-search-snapshots", "region": "us-east-1" }
-}
+A 30GB HNSW graph over 10 million 768-dimensional vectors sitting in S3 costs a fraction of what it costs on attached disk. And because segments are immutable, you never need to reconcile a partial write or coordinate a lock. The segment either exists or it doesn't.
+
+```java
+// Lucene's Directory abstraction already supports this
+// S3Directory, GCSDirectory — drop-in replacements for FSDirectory
+Directory dir = S3Directory.open("my-bucket", "index-path");
+IndexWriterConfig config = new IndexWriterConfig(analyzer);
+IndexWriter writer = new IndexWriter(dir, config);
 ```
-
-Then mount old indices cold, directly from the snapshot:
-
-```json
-POST /_snapshot/my-s3-repo/my-snapshot/_mount
-{
-  "index": "products-2024-01",
-  "renamed_index": "products-2024-01-cold"
-}
-```
-
-Segment data streams on demand, hot regions cache on local SSD. A 30GB HNSW graph over 10M vectors sits in S3 at $0.023/GB instead of on EBS at $0.10/GB. The search still works. It just costs less.
 
 A standalone vector database doesn't give you this. You build the tiering yourself, or you pay for managed infrastructure that already reinvented it.
 
@@ -123,19 +103,11 @@ A standalone vector database doesn't give you this. You build the tiering yourse
 
 New infrastructure has a cost that doesn't show up in any benchmark: everything that can go wrong now has two places to go wrong in.
 
-```python
-def index_product(product):
-    es.index(index="products", body=product)   # succeeds
-    vector_db.upsert(product["id"], embedding) # times out
-    # keyword search finds it. vector search doesn't.
-    # no error. no alert. just wrong results.
-```
+Two systems means dual-write bugs, replication lag, the vector index drifting quietly from the source of truth with no error surfaced to the caller. With Lucene the embedding and the document are the same write, same segment, same commit. There is no second system to fall out of sync.
 
-Two systems means dual-write bugs, replication lag, the vector index drifting from the source of truth. With Lucene-based vector search the embedding and the document are the same write, same index, same transaction. Line B doesn't exist.
+I'm not arguing that purpose-built vector databases are never worth it. At extreme scale — billions of vectors, sub-10ms p99, commodity margins — the tradeoffs shift. Specialized systems can tune away from the generality that makes Lucene flexible. That is a real advantage, for that specific problem.
 
-I'm not arguing that purpose-built vector databases are never worth it. At extreme scale — billions of vectors, sub-10ms p99, commodity margins — the tradeoffs genuinely shift. Specialized systems can tune away from the generality that makes Lucene flexible. That's a real advantage, for that specific problem.
-
-For most teams, the threshold is higher than they think. The filtering is already there. The segments already fit in object storage. The operational playbook already exists.
+For most teams, the threshold is higher than they think. The filtered HNSW is already there. The segments already fit in object storage. The operational surface area is already understood.
 
 You don't need a new database. You need to look harder at the one you have.
 
