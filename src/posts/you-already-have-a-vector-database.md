@@ -112,4 +112,4 @@ For most teams, the threshold is higher than they think. The filtered HNSW is al
 
 You don't need a new database. You need to look harder at the one you have.
 
-— Ali
+— v
