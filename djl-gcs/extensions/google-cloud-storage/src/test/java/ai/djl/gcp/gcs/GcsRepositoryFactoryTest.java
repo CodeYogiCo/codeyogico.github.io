@@ -40,7 +40,7 @@ public class GcsRepositoryFactoryTest {
         URI uri = URI.create("gs://my-bucket/models/resnet");
         Repository repo = factory.newInstance("test-repo", uri);
         Assert.assertNotNull(repo);
-        Assert.assertInstanceOf(repo, GcsRepository.class);
+        Assert.assertTrue(repo instanceof GcsRepository);
     }
 
     @Test(expectedExceptions = IllegalArgumentException.class)

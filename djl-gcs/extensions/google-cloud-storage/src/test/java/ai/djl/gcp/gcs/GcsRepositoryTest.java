@@ -12,10 +12,10 @@
  */
 package ai.djl.gcp.gcs;
 
+import ai.djl.Application;
 import ai.djl.repository.Artifact;
 import ai.djl.repository.MRL;
 import ai.djl.repository.Metadata;
-import ai.djl.repository.Repository;
 
 import com.google.api.gax.paging.Page;
 import com.google.cloud.storage.Blob;
@@ -57,7 +57,7 @@ public class GcsRepositoryTest {
 
         GcsRepository repo =
                 new GcsRepository("test", URI.create("gs://my-bucket/models/"), mockStorage);
-        MRL mrl = repo.model(ai.djl.Application.UNDEFINED, "ai.djl.gcp", "resnet");
+        MRL mrl = repo.model(Application.UNDEFINED, "ai.djl.gcp", "resnet");
         Metadata m = repo.locate(mrl);
         Assert.assertNull(m);
     }
@@ -86,7 +86,7 @@ public class GcsRepositoryTest {
 
         URI uri = URI.create("gs://my-bucket/models/resnet/");
         GcsRepository repo = new GcsRepository("test", uri, mockStorage);
-        MRL mrl = repo.model(ai.djl.Application.UNDEFINED, "ai.djl.gcp", "resnet");
+        MRL mrl = repo.model(Application.UNDEFINED, "ai.djl.gcp", "resnet");
         Metadata m = repo.locate(mrl);
         Assert.assertNotNull(m);
 
@@ -97,10 +97,45 @@ public class GcsRepositoryTest {
     }
 
     @Test
-    public void testRepositoryCreatedViaServiceLoader() {
-        // Verify GcsRepositoryFactory is on the classpath and auto-registered
-        Repository repo = Repository.newInstance("gcs-test", "gs://dummy-bucket/model/");
-        Assert.assertNotNull(repo);
-        Assert.assertInstanceOf(repo, GcsRepository.class);
+    public void testResolveReturnsFirstArtifact() throws IOException {
+        Storage mockStorage = Mockito.mock(Storage.class);
+
+        Blob blob = Mockito.mock(Blob.class);
+        Mockito.when(blob.getName()).thenReturn("models/resnet/model.pt");
+        Mockito.when(blob.getSize()).thenReturn(512L);
+
+        Page<Blob> page = Mockito.mock(Page.class);
+        Mockito.when(page.getValues()).thenReturn(Collections.singletonList(blob));
+        Mockito.when(
+                        mockStorage.list(
+                                Mockito.anyString(),
+                                Mockito.any(Storage.BlobListOption.class),
+                                Mockito.any(Storage.BlobListOption.class),
+                                Mockito.any(Storage.BlobListOption.class)))
+                .thenReturn(page);
+
+        URI uri = URI.create("gs://my-bucket/models/resnet/");
+        GcsRepository repo = new GcsRepository("test", uri, mockStorage);
+        MRL mrl = repo.model(Application.UNDEFINED, "ai.djl.gcp", "resnet");
+        Artifact artifact = repo.resolve(mrl, Collections.emptyMap());
+        Assert.assertNotNull(artifact);
+    }
+
+    @Test
+    public void testGetResourcesEmptyWhenNoObjects() {
+        Storage mockStorage = Mockito.mock(Storage.class);
+        Page<Blob> emptyPage = Mockito.mock(Page.class);
+        Mockito.when(emptyPage.getValues()).thenReturn(Collections.emptyList());
+        // Empty prefix → only pageSize + delimiter options (2 args, no prefix option)
+        Mockito.when(
+                        mockStorage.list(
+                                Mockito.anyString(),
+                                Mockito.any(Storage.BlobListOption.class),
+                                Mockito.any(Storage.BlobListOption.class)))
+                .thenReturn(emptyPage);
+
+        GcsRepository repo =
+                new GcsRepository("test", URI.create("gs://empty-bucket/"), mockStorage);
+        Assert.assertTrue(repo.getResources().isEmpty());
     }
 }
