@@ -4,7 +4,6 @@ tag: search
 title: "Matryoshka embeddings and the e-commerce retrieval funnel"
 read: 9 min
 deck: "One model, many resolutions. How nested embeddings let you run cheap recall and expensive re-ranking without paying for both upfront."
-hidden: true
 ---
 
 Most teams think of embeddings as atomic. You generate a 768-dimensional vector. You store it. You compare it. You get a result. The whole vector travels through every stage of the pipeline at full cost.
