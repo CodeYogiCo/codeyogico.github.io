@@ -6,6 +6,8 @@ import LSHMatchCalculator from './LSHMatchCalculator.jsx'
 import ScannPipelineDiagram from './ScannPipelineDiagram.jsx'
 import ScannPartitionDiagram from './ScannPartitionDiagram.jsx'
 import ScannErrorDiagram from './ScannErrorDiagram.jsx'
+import MrlTruncationDiagram from './MrlTruncationDiagram.jsx'
+import MrlFunnelDiagram from './MrlFunnelDiagram.jsx'
 
 export const widgets = {
   'ndcg-calc': NDCGCalculator,
@@ -16,4 +18,6 @@ export const widgets = {
   'scann-pipeline': ScannPipelineDiagram,
   'scann-partition': ScannPartitionDiagram,
   'scann-error': ScannErrorDiagram,
+  'mrl-truncation': MrlTruncationDiagram,
+  'mrl-funnel': MrlFunnelDiagram,
 }
