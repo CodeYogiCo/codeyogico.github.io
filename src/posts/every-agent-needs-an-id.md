@@ -4,7 +4,6 @@ tag: systems
 title: Every agent needs an ID
 read: 5 min
 deck: "Human identity is persistent, embodied, legal. Agent identity is a string in a header. The difference matters more than it sounds."
-hidden: true
 ---
 
 When you onboard a person to a system, you give them an account. Behind it is a name, an email, a password, a face maybe. Something anchored to a human who exists in the world and can be held responsible.
