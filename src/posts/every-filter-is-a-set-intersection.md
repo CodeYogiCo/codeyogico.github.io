@@ -79,7 +79,33 @@ chunk 12  →  run      [(13568, 30000)]             ~4 bytes
    one logical set — three different physical layouts
 ```
 
-Three chunks, three representations, each chosen by the data in that chunk alone — no one decided up front that `color:red` was "a sparse set" or "a dense set", because it's both, in different regions. That per-chunk autonomy is the whole idea; everything else is bookkeeping.
+Three chunks, three representations, each chosen by the data in that chunk alone — no one decided up front that `color:red` was "a sparse set" or "a dense set", because it's both, in different regions. That per-chunk choice is the whole idea; everything else is bookkeeping.
+
+### the same thing in code
+
+The nice part is that you never deal with chunks or containers yourself. You add integers; the library picks the right layout per chunk for you. Here's that exact `color:red` set, built with the [RoaringBitmap](https://github.com/RoaringBitmap/RoaringBitmap) Java library:
+
+```java
+import org.roaringbitmap.RoaringBitmap;
+
+RoaringBitmap red = new RoaringBitmap();
+
+red.add(3);
+red.add(17);
+red.add(902);                  // chunk 0  — three values, stays a small array
+
+for (int id : scatteredRedsInChunk5) {
+    red.add(id);               // chunk 5  — crosses 4,096, flips to a bitmap
+}
+
+red.add(800_000L, 830_001L);   // chunk 12 — one contiguous range of IDs
+red.runOptimize();             // that range collapses into a single run
+
+red.getCardinality();          // how many reds in total
+red.getSizeInBytes();          // bytes actually used — small, despite the range
+```
+
+No `if (sparse) … else …` anywhere. `add` decides. `runOptimize()` is the one manual step — it scans for long consecutive ranges and rewrites them as runs. Skip it and the contiguous range above would sit as a full 8 KB bitmap instead of a few bytes.
 
 ## why this makes the operations fast
 
@@ -112,7 +138,31 @@ You probably don't import a roaring library yourself. You inherit it — and ins
 
 **Facet formation.** A facet is a count per attribute value — "Nike (412), Adidas (380), …" — computed *over the current result set*. Done naively that's a scan; done with bitmaps it's an intersection cardinality. Keep one bitmap per facet value, intersect each with the result-set bitmap, and the size of the intersection *is* the facet count. No documents are read; you're counting set overlaps. Multi-select facets ("Nike OR Adidas") are just a union first.
 
-The thread tying these four together: every stage that isn't scoring reduces to *which documents satisfy this?* — and combining those answers. Make that set algebra cheap and filtering, availability, vector constraints, and faceting all get cheap at once.
+And here's the thing worth seeing: all four of those jobs are *one or two method calls* once each clause is a bitmap. Same library, same handful of operations:
+
+```java
+// each clause is just a set of document IDs (its postings)
+RoaringBitmap red     = postings("color", "red");
+RoaringBitmap inStock = postings("in_stock", "true");
+RoaringBitmap nike    = postings("brand", "nike");
+RoaringBitmap adidas  = postings("brand", "adidas");
+
+// filter — red AND in stock                  (intersection)
+RoaringBitmap results = RoaringBitmap.and(red, inStock);
+
+// multi-select facet — nike OR adidas         (union)
+RoaringBitmap brands = RoaringBitmap.or(nike, adidas);
+
+// facet count for "nike" in the results       (no documents read)
+int nikeCount = RoaringBitmap.andCardinality(results, nike);
+
+// vector pre-filter — is this candidate allowed?
+boolean eligible = results.contains(candidateDocId);
+```
+
+`and` is your filter. `or` is multi-select. `andCardinality` is a facet count — it returns the size of the overlap without building the intersection. `contains` is the membership test a vector search runs against the allowed set. Four search features, four method calls.
+
+The thread tying them together: every stage that isn't scoring reduces to *which documents satisfy this?* — and combining those answers. Make that set algebra cheap and filtering, availability, vector constraints, and faceting all get cheap at once.
 
 ## the numbers
 
