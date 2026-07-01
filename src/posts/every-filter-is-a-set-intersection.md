@@ -2,7 +2,7 @@
 date: 2026-06-29
 tag: search
 title: "Every filter is a set intersection"
-read: 9 min
+read: 10 min
 deck: "Filter caching, availability, vector pre-filtering, facet counts — under all of them is the same operation: combining sets of document IDs. Roaring bitmaps are the structure that makes it fast, and the trick is that they refuse to commit to a single representation."
 ---
 
@@ -14,76 +14,94 @@ So a boring-sounding question sits under most of your search latency: how fast c
 
 This post is about the structure search engines reach for to answer that — the roaring bitmap — and the single idea that makes it work: refusing to pick one representation.
 
-In one line: **a roaring bitmap is a compressed set of integers that chops the ID space into fixed chunks and stores each chunk in whichever layout — a small array, a dense bitmap, or a run-length list — is smallest for the data in that chunk.** That's the whole concept. It stays compact when the set is tiny *and* when it's enormous, and it combines with other sets fast. The rest of this post is why that one decision matters so much in a search engine.
+In one line: **a roaring bitmap is a compressed set of IDs that splits them into fixed groups — picture aisles of a store — and lets each group keep whichever record is smallest: a short list, a tick-sheet of bits, or a range.** That's the whole concept. It stays compact when the set is tiny *and* when it's enormous, and it combines with other sets fast. The rest of this post builds that up from scratch, and shows why it matters so much in a search engine.
 
-## the two obvious answers, and why each is wrong half the time
+## start with the simplest idea: a bitmap
 
-A set of IDs is a set of integers. There are two textbook ways to store one.
-
-**A sorted array of integers.** `[3, 17, 902, 40001, ...]`. To intersect two of them, walk both with two pointers and emit matches. Compact when the set is small. But suppose the universe is 200 million IDs and your set — "in stock", "active users", "rows from 2024" — holds 120 million of them. Now you're storing 120 million 4-byte integers, 480 MB, for one set. Intersecting two dense arrays means marching through hundreds of millions of entries.
-
-**A plain bitmap.** One bit per possible ID. Bit *i* is 1 if *i* is in the set. Intersection is breathtaking — AND the two bit arrays a machine word (64 bits) at a time, no branches. But the size is fixed by the universe, not the set. For 200 million IDs that's 200 million bits, 25 MB, *per set, whether it holds 50 million elements or 3.* A rare attribute that matches 11 things still costs you 25 MB.
+Forget clever data structures for a second. Say your catalog has just ten products, with IDs 0 through 9, and you want to remember which ones are red. The plainest way imaginable is a row of boxes — one box per product — each holding a `0` or a `1`:
 
 ```
-sorted array          great when sparse     terrible when dense
-[3, 17, 902, ...]     2–4 bytes/element     480 MB for 120M IDs
-
-plain bitmap          great when dense      terrible when sparse
-1011000100...         word-at-a-time AND    25 MB for 3 IDs
+product id:   0  1  2  3  4  5  6  7  8  9
+red?          0  1  1  0  0  1  0  0  0  1
+              → products 1, 2, 5 and 9 are red
 ```
 
-Neither is wrong, exactly. Each is wrong *for the wrong data*. Any real workload has both kinds of set side by side — huge dense ones, tiny sparse ones, and everything between. Whatever you pick globally, half your sets punish you for it.
+That row of bits *is* a **bitmap**. Box number *i* answers one yes/no question about product *i* — here, "is it red?" A `1` means yes, a `0` means no. That's the entire idea.
 
-## the roaring idea: decide per chunk, not per set
-
-Roaring bitmaps start from the observation that you don't have to choose once. You can choose *locally*.
-
-Take a 32-bit ID and split it in half. The top 16 bits select a **chunk** — a block of 65,536 consecutive IDs. The bottom 16 bits are the position *within* that chunk. The integer 1,000,000 has top bits 15 (it lives in chunk 15) and bottom bits 16,960.
-
-The whole structure is a sorted list of chunks that contain at least one element, keyed by those top 16 bits:
+Now the payoff. Suppose you keep a second bitmap for "in stock":
 
 ```
-chunk key →  container
-─────────────────────────
-   0       →  [ ... values 0 .. 65535 ... ]
-   3       →  [ ... values 196608 .. 262143 ... ]
-  15       →  [ ... values 983040 .. 1048575 ... ]
-  ...
+red?           0  1  1  0  0  1  0  0  0  1
+in stock?      1  1  0  0  1  1  0  0  1  1
+red AND stock  0  1  0  0  0  1  0  0  0  1
+               → products 1, 5 and 9
 ```
 
-Empty regions of the ID space cost nothing — there's simply no chunk for them. To test membership, binary-search the chunk keys, then look inside that one chunk.
+To find products that are red *and* in stock, lay the two rows on top of each other and keep only the columns that are `1` in both. That's a filter — nothing more. And a computer does this column-by-column comparison 64 boxes at a time in a single instruction, so even across millions of products it's blazing fast. This is why bitmaps are everywhere in search: **a filter is just "line up two rows of bits and AND them."**
 
-Here's the actual trick. **Each chunk picks its own representation independently**, based on how many elements it happens to hold:
+## the problem: real catalogs are huge and mostly empty
 
-- **Array container** — a sorted array of 16-bit values. Used when the chunk is sparse. Two bytes per element.
-- **Bitmap container** — a flat 65,536-bit bitmap, exactly 8 KB. Used when the chunk is dense.
-- **Run container** — a list of `(start, length)` runs. Used when the values come in long consecutive stretches (e.g. 40,000 through 65,000 all present). A run of 25,000 values costs *one* pair of numbers.
+The tiny example hides a cost that only shows up at scale. A bitmap always keeps one box per product — *whether that box is a 1 or a 0*. Ten products, ten boxes: nothing to worry about. But a real catalog has 200 million products, so every bitmap is 200 million boxes ≈ 25 MB, and you keep one for each attribute value.
 
-The crossover between array and bitmap is not a vibe — it's arithmetic. A bitmap container is fixed at 8,192 bytes. An array container costs 2 bytes per element. They break even at 8,192 / 2 = **4,096 elements**. Below that the array is smaller; above it the bitmap is. So a chunk holding fewer than 4,096 elements stores them as an array, and the moment it crosses 4,096 it converts itself to a bitmap. A rare attribute is one small array container. A near-universal one is thousands of full bitmap (and run) containers. Same structure, no global compromise.
+For a common attribute like "in stock," that's fine — lots of 1s, the space is pulling its weight. The trouble is the *rare* attributes. "Vermilion" might match 11 products out of 200 million. Its bitmap is *still* 25 MB — and 199,999,989 of those boxes are `0`. You're spending 25 MB to remember 11 things.
+
+The obvious fix is to stop storing all those zeros: just keep a **list of the IDs that are `1`**. Vermilion becomes `[418, 90271, …]` — eleven numbers, a few dozen bytes. Problem solved?
+
+Not quite — because now flip the situation around. "In stock" matches 120 million products. As a list, that's 120 million numbers, roughly 480 MB — *far worse* than the 25 MB bitmap, and slower to compare, because you're walking a giant list instead of ANDing machine words.
+
+```
+                sparse set (11 items)      dense set (120M items)
+plain bitmap    25 MB   (mostly zeros)     25 MB   (good)
+list of IDs     ~44 bytes (great)          480 MB  (terrible)
+```
+
+So there's no single winner. A plain bitmap wastes space on sparse sets; a list wastes space *and* speed on dense ones. And a real search index is full of **both** — a handful of giant sets like "in stock," a long tail of tiny ones like "vermilion," and everything in between. Whatever one format you commit to, half your data punishes you for it.
+
+## the roaring idea: let each aisle keep its own kind of record
+
+Roaring bitmaps start from a simple observation: you don't have to choose *once*. You can choose *locally* — aisle by aisle.
+
+Picture the store laid out so products sit in ID order, and chop it into **aisles** of 65,536 consecutive IDs each: IDs 0–65,535 are aisle 0, IDs 65,536–131,071 are aisle 1, and so on. Here's the move — instead of forcing one format on the whole store, *each aisle keeps whichever kind of record is cheapest for the red products that happen to live in it*:
+
+- An aisle with only a handful of red products just **jots down their IDs** — a short list.
+- An aisle that's mostly red keeps a **tick-sheet**, one box per slot — a bitmap.
+- An aisle where a whole run of shelves is red writes down a **single range** — "slots 400 to 450."
+
+Three aisles, three different records, and no aisle had to care what the others chose. An aisle with no red products at all simply isn't recorded — empty stretches of the store cost nothing.
+
+(The mechanism, if you're curious: an ID is a 32-bit number split in half. The top 16 bits name the aisle — roaring's word is **chunk** — and the bottom 16 bits are the slot inside it. So product 1,000,000 sits in aisle 15, slot 16,960. You can ignore the bit-twiddling and just picture aisles of 65,536.)
+
+The three kinds of record have proper names, and they're exactly the two ideas from before plus one:
+
+- **Array container** — the short list of IDs. The "jot down the few red ones" aisle. Two bytes per item.
+- **Bitmap container** — the tick-sheet: one bit per slot, a flat 8 KB. The "mostly red" aisle.
+- **Run container** — a list of `(start, length)` ranges. The "a whole stretch of shelves is red" aisle. A run of 25,000 costs *one* pair of numbers.
+
+When does an aisle switch from a list to a tick-sheet? It's not a guess — it's arithmetic. A tick-sheet is a fixed 8,192 bytes. A list costs 2 bytes per item. They break even at 8,192 ÷ 2 = **4,096 items**. Below that the list is smaller; above it the tick-sheet wins. So an aisle with fewer than 4,096 red products keeps a list, and the instant it crosses 4,096 it flips itself to a tick-sheet — automatically, no one deciding globally.
 
 ### a worked example
 
-Make it concrete. Suppose `color:red` matches these document IDs, and watch where each one lands. The chunk is `id ÷ 65,536`; the position inside the chunk is `id mod 65,536`.
+Make it concrete. Say the red products fall like this, and watch which record each aisle ends up keeping. (A product's aisle is `id ÷ 65,536`; its slot is the remainder.)
 
-- **Documents 3, 17, and 902.** All in chunk 0 (`0 ÷ 65,536 = 0`), and there are only three of them. Three is far below 4,096, so chunk 0 is an **array container**: literally `[3, 17, 902]`, six bytes of data.
-- **40,000 reds scattered through chunk 5** (document IDs 327,680 – 393,215). 40,000 is well past 4,096, so this chunk flips to a **bitmap container** — a flat 8 KB block where bit `(id − 327,680)` is set. It doesn't matter that the reds are scattered; the bitmap is the same 8 KB whether it holds 40,000 elements or 60,000.
-- **Documents 800,000 – 830,000, all red and contiguous** (a newly-added product line with sequential IDs). These fall in chunk 12 (IDs 786,432 – 851,967). 30,001 elements is past 4,096 — but they're *consecutive*, so instead of a bitmap this becomes a **run container** holding one run: start `800,000 − 786,432 = 13,568`, length `30,000`. That entire range of 30,001 documents costs a single pair of numbers.
+- **Products 3, 17, and 902** — all in aisle 0, and only three of them. Three is far below 4,096, so aisle 0 keeps a **list**: literally `[3, 17, 902]`, six bytes.
+- **40,000 red products scattered through aisle 5** (IDs 327,680 – 393,215). Well past 4,096, so this aisle switches to a **tick-sheet** — a flat 8 KB with a box per slot. It doesn't matter that the reds are scattered; the tick-sheet is the same 8 KB whether it holds 40,000 reds or 60,000.
+- **Products 800,000 – 830,000, all red and sitting on consecutive shelves** (a newly-stocked line with sequential IDs). These land in aisle 12. That's 30,001 items — past 4,096 — but they're *consecutive*, so instead of a tick-sheet the aisle keeps a single **range**: start 13,568 (that's 800,000 − 786,432, where aisle 12 begins), length 30,000. Thirty thousand products, one pair of numbers.
 
 ```
-color:red  →  roaring bitmap
-─────────────────────────────────────────────────────────
-chunk  0  →  array    [3, 17, 902]                 ~6 bytes
-chunk  5  →  bitmap   1011000100…  (40,000 set)    8 KB
-chunk 12  →  run      [(13568, 30000)]             ~4 bytes
-─────────────────────────────────────────────────────────
-   one logical set — three different physical layouts
+red products  →  roaring bitmap
+──────────────────────────────────────────────────────────
+aisle  0  →  list        [3, 17, 902]              ~6 bytes
+aisle  5  →  tick-sheet  ▦▦▢▦▢▢▦…  (40,000 red)    8 KB
+aisle 12  →  range       [800,000 … 830,000]       ~4 bytes
+──────────────────────────────────────────────────────────
+   one set of red products — three kinds of record
 ```
 
-Three chunks, three representations, each chosen by the data in that chunk alone — no one decided up front that `color:red` was "a sparse set" or "a dense set", because it's both, in different regions. That per-chunk choice is the whole idea; everything else is bookkeeping.
+Three aisles, three kinds of record, each chosen by what's in that aisle alone — nobody decided up front that "red" was a rare attribute or a common one, because it's *both*, in different parts of the store. That per-aisle choice is the whole idea; everything else is bookkeeping.
 
 ### the same thing in code
 
-The nice part is that you never deal with chunks or containers yourself. You add integers; the library picks the right layout per chunk for you. Here's that exact `color:red` set, built with the [RoaringBitmap](https://github.com/RoaringBitmap/RoaringBitmap) Java library:
+The nice part is that you never sort products into aisles or choose record types yourself. You just add IDs; the library files each one into the right aisle and picks that aisle's record for you. Here's that exact set of red products, built with the [RoaringBitmap](https://github.com/RoaringBitmap/RoaringBitmap) Java library:
 
 ```java
 import org.roaringbitmap.RoaringBitmap;
@@ -92,14 +110,14 @@ RoaringBitmap red = new RoaringBitmap();
 
 red.add(3);
 red.add(17);
-red.add(902);                  // chunk 0  — three values, stays a small array
+red.add(902);                  // aisle 0  — three items, kept as a small list
 
-for (int id : scatteredRedsInChunk5) {
-    red.add(id);               // chunk 5  — crosses 4,096, flips to a bitmap
+for (int id : scatteredRedsInAisle5) {
+    red.add(id);               // aisle 5  — crosses 4,096, becomes a tick-sheet
 }
 
-red.add(800_000L, 830_001L);   // chunk 12 — one contiguous range of IDs
-red.runOptimize();             // that range collapses into a single run
+red.add(800_000L, 830_001L);   // aisle 12 — one run of consecutive IDs
+red.runOptimize();             // collapses that run into a single range
 
 red.getCardinality();          // how many reds in total
 red.getSizeInBytes();          // bytes actually used — small, despite the range
@@ -109,9 +127,9 @@ No `if (sparse) … else …` anywhere. `add` decides. `runOptimize()` is the on
 
 ## why this makes the operations fast
 
-Memory is only half the story. The reason roaring is *inside* your engine is that the set operations are fast precisely because of the chunking.
+Memory is only half the story. The reason roaring is *inside* your engine is that the set operations are fast precisely because of those aisles.
 
-To intersect two roaring bitmaps, you don't touch the data first — you intersect the *chunk keys*. Both are sorted lists, so this is a merge: chunks present in only one of the two sets can't contribute to an intersection and are skipped entirely. A query for `A AND B` never looks at the regions of the ID space where `A` doesn't exist.
+To intersect two roaring bitmaps, you don't touch the data first — you line up their aisle numbers (the *chunk keys*). Both are sorted, so this is a quick merge: an aisle that appears in only one of the two sets can't contribute to an intersection, so you skip it entirely. A query for `red AND in-stock` never looks at the aisles where there are no reds.
 
 For the chunks that *do* overlap, roaring dispatches on the pair of container types, and each combination has its own tuned routine:
 
